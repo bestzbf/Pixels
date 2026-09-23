@@ -21,9 +21,9 @@
 | 权重 | 状态 | 来源/位置 |
 |---|---|---|
 | Wan2.1 视频 VAE（共享 latent 接口，126.9 M） | ✅ 已下载并在 GPU 跑通 | ModelScope `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` → `/mnt/data/pixels-weights/wan-vae/vae/`（507,591,892 B，194 tensors 校验通过） |
-| DINOv2-base / CLIP（Table 1 指标） | ⏳ 后台拉取中，走 `scripts/fetch_weights_modelscope.sh` | ModelScope `AI-ModelScope/dinov2-base`、`AI-ModelScope/clip-vit-large-patch14` |
+| DINOv2-base（346,3 MB）+ CLIP-ViT-L/14（1,710.5 MB） | ✅ 已下载，本机加载成功 | ModelScope `facebook/dinov2-base`、`AI-ModelScope/clip-vit-large-patch14`（注意：`AI-ModelScope/dinov2-base`、`openai/...` 在 ModelScope 上不存在） |
 | **4RC（31 层精化 + 两头的预训练初始化）** | ❌ **拿不到**：ModelScope 无镜像（404），huggingface.co 本机不可达（0 B/s），hf-mirror 亦不通 | 需能访问 HF 的机器拉 `Luo-Yihang/4RC`，或作者另发镜像 |
-| Wan2.1/2.2 DiT（采 z^gen，~17 GB/个） | ⏳ 可选，只有做 Table 1 生成评测才需要 | ModelScope 同名仓库 |
+| Wan2.1/2.2 DiT（采 z^gen，~17 GB/个） | ⏳ 可选，只有做 Table 1 生成评测才需要（ModelScope 有同名仓库） | 未拉，避免占用 17 GB×2 与带宽 |
 
 `scripts/fetch_weights.sh` 走 HF/hf-mirror（本机不通）；本机可用通道另写为 `scripts/fetch_weights_modelscope.sh`，带断点续传与内容长度校验。
 
@@ -32,6 +32,12 @@
 **顺带修正的论文配置**：VAE 的归一化常数原先标 `verify`，现已从 checkpoint 的 `vae/config.json` 取真值写入
 `configs/model/l4ar_paper.yaml`（16 维 `latents_mean` / `latents_std`），`SharedLatentInterface.normalize()` 改为逐通道
 `(z-mean)/std`。
+
+**真实指标通路已在 GPU 上跑通**（`tools/eval_generation.py --extractor dinov2`，权重全部本地）：
+`Text CLIP 10.68 / CLIP-I 66.18 / DINO global 27.31 / DINO match 27.30 / DINO F1 3.87`。
+数值低是应当的（几何头随机初始化 + 随机合成 latent 用例），验证的是**五列指标的 computation 与本地权重加载**。
+顺手修了 `ClipScorers`：transformers 5.0 的 `get_text_features()/get_image_features()` 返回
+`BaseModelOutputWithPooling` 而非张量，现由 `_features()` 统一取 `pooler_output`。
 
 ## 3. ScanNet 数据：**本机没有**
 

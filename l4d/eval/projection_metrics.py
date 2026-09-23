@@ -121,6 +121,17 @@ class ClipScorers:
         for param in self.model.parameters():
             param.requires_grad_(False)
 
+    @staticmethod
+    def _features(output: object) -> torch.Tensor:
+        """transformers<=4 returns tensors from get_*_features, v5 returns a model output object."""
+        if torch.is_tensor(output):
+            return output
+        for attribute in ("pooler_output", "image_embeds", "text_embeds", "last_hidden_state"):
+            value = getattr(output, attribute, None)
+            if torch.is_tensor(value):
+                return value
+        raise TypeError(f"unexpected CLIP output type {type(output).__name__}")
+
     def _prepare(self, image: torch.Tensor) -> torch.Tensor:
         resized = F.interpolate(image.unsqueeze(0), size=(224, 224), mode="bicubic", align_corners=False)
         mean = torch.tensor(CLIP_MEAN, device=resized.device).view(1, 3, 1, 1)
@@ -131,15 +142,14 @@ class ClipScorers:
     def text_to_image(self, text: str, image: torch.Tensor) -> float:
         encoded = self.processor(text=[text], return_tensors="pt", padding=True, truncation=True)
         kwargs = {key: encoded[key].to(self.device) for key in ("input_ids", "attention_mask") if key in encoded}
-        text_features = F.normalize(self.model.get_text_features(**kwargs), dim=-1)
-        image_features = F.normalize(self.model.get_image_features(pixel_values=self._prepare(image).to(self.device)), dim=-1)
+        text_features = F.normalize(self._features(self.model.get_text_features(**kwargs)), dim=-1)
+        image_features = F.normalize(self._features(self.model.get_image_features(pixel_values=self._prepare(image).to(self.device))), dim=-1)
         return float(F.cosine_similarity(text_features, image_features, dim=-1)) * 100.0
 
     @torch.no_grad()
     def image_to_image(self, first: torch.Tensor, second: torch.Tensor) -> float:
         batch = torch.cat([self._prepare(first), self._prepare(second)], dim=0).to(self.device)
-        features = self.model.get_image_features(pixel_values=batch)
-        features = F.normalize(features, dim=-1)
+        features = F.normalize(self._features(self.model.get_image_features(pixel_values=batch)), dim=-1)
         return float(F.cosine_similarity(features[0], features[1], dim=-1)) * 100.0
 
 
