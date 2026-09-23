@@ -21,9 +21,11 @@
 | 权重 | 状态 | 来源/位置 |
 |---|---|---|
 | Wan2.1 视频 VAE（共享 latent 接口，126.9 M） | ✅ 已下载并在 GPU 跑通 | ModelScope `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` → `/mnt/data/pixels-weights/wan-vae/vae/`（507,591,892 B，194 tensors 校验通过） |
-| DINOv2-base / CLIP（Table 1 指标） | ⏳ 走 ModelScope（`scripts/fetch_weights.sh` 已改为 ModelScope + 阿里云通道） | `AI-ModelScope/dinov2-base` 等 |
+| DINOv2-base / CLIP（Table 1 指标） | ⏳ 后台拉取中，走 `scripts/fetch_weights_modelscope.sh` | ModelScope `AI-ModelScope/dinov2-base`、`AI-ModelScope/clip-vit-large-patch14` |
 | **4RC（31 层精化 + 两头的预训练初始化）** | ❌ **拿不到**：ModelScope 无镜像（404），huggingface.co 本机不可达（0 B/s），hf-mirror 亦不通 | 需能访问 HF 的机器拉 `Luo-Yihang/4RC`，或作者另发镜像 |
 | Wan2.1/2.2 DiT（采 z^gen，~17 GB/个） | ⏳ 可选，只有做 Table 1 生成评测才需要 | ModelScope 同名仓库 |
+
+`scripts/fetch_weights.sh` 走 HF/hf-mirror（本机不通）；本机可用通道另写为 `scripts/fetch_weights_modelscope.sh`，带断点续传与内容长度校验。
 
 缺 4RC 的后果已如实处理：`tools/train.py` 现在**警告后继续随机初始化**（结构与训练动力学有效，绝对数值不可与论文对比）。
 
