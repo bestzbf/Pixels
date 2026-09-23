@@ -101,7 +101,8 @@ class ReconstructionClips(Dataset):
             image = Image.open(paths[position]).convert("RGB").resize((self.image_size[1], self.image_size[0]))
             array = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0)
             frames.append(array.permute(2, 0, 1))
-        return torch.stack(frames, dim=1)  # (3,T,H,W)
+        video = torch.stack(frames, dim=1)  # (3,T,H,W)
+        return video * 2.0 - 1.0  # the video VAEs are trained on [-1,1]
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = self.records[index]

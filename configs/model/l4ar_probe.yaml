@@ -1,0 +1,11 @@
+# Throughput probe: paper structure, reduced width so a 24 GB card can run 21-frame clips.
+# Real runs use l4ar_paper.yaml; only token_dim/depth/heads/hidden change.
+_base_: l4ar_paper.yaml
+
+model:
+  token_dim: 512
+  heads: 8
+  depth: 12
+  tap_after: [3, 7, 11]
+  geometry_hidden: 128
+  camera_hidden: 256

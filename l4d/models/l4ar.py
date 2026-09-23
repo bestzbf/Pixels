@@ -24,7 +24,17 @@ class VAESpec:
     temporal_compression: int = 4
     scaling: float = 1.0
     shift: float = 0.0
+    latents_mean: tuple = ()
+    latents_std: tuple = ()
     layout: str = "B,C,T,H,W"
+
+    def channel_stats(self, device=None, dtype=None):
+        """Per-channel mean/std as (1,C,1,1,1) tensors, or None when the spec is not channel-wise."""
+        if len(self.latents_mean) != self.channels or len(self.latents_std) != self.channels:
+            return None
+        mean = torch.tensor(self.latents_mean, device=device, dtype=dtype).view(1, -1, 1, 1, 1)
+        std = torch.tensor(self.latents_std, device=device, dtype=dtype).view(1, -1, 1, 1, 1)
+        return mean, std
 
     def latent_shape_for(self, num_frames: int, height: int, width: int) -> tuple[int, int, int]:
         t = 1 + (num_frames - 1) // self.temporal_compression
@@ -66,7 +76,7 @@ class L4ARConfig:
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "L4ARConfig":
-        kwargs = {k: v for k, v in data.items() if k != "vae"}
+        kwargs = {k: (tuple(v) if isinstance(v, list) else v) for k, v in data.items() if k != "vae"}
         vae = vae_spec_from_dict(data.get("vae", {})) if isinstance(data.get("vae"), dict) else VAESpec()
         for key, value in list(kwargs.items()):
             if isinstance(value, list):

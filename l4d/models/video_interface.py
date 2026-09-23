@@ -50,8 +50,16 @@ class SharedLatentInterface(nn.Module):
             raise ValueError(f"latent temporal length {latent.shape[2]} not in supported {self.supported_frames}")
 
     def normalize(self, latent: torch.Tensor) -> torch.Tensor:
-        """Apply the shared VAE scaling/shift convention before the alignment module."""
-        return (latent - self.vae.shift) * self.vae.scaling
+        """Apply the shared VAE normalisation before the alignment module.
+
+        Wan ships per-channel latents_mean / latents_std in the VAE config; scalar shift/scaling is the
+        fallback for specs that do not carry them.
+        """
+        stats = self.vae.channel_stats(device=latent.device, dtype=latent.dtype)
+        if stats is None:
+            return (latent - self.vae.shift) * self.vae.scaling
+        mean, std = stats
+        return (latent - mean) / std
 
 
 class VideoVAEBackend(nn.Module):
@@ -110,16 +118,20 @@ class SyntheticVideoVAE(VideoVAEBackend):
 class WanVideoVAE(VideoVAEBackend):
     """Frozen Wan VAE wrapper (diffusers `AutoencoderKLWan`), loaded lazily."""
 
-    def __init__(self, spec: VAESpec, pretrained: str = "Wan-AI/Wan2.1-T2V-1.3B"):
+    def __init__(self, spec: VAESpec, pretrained: str = "Wan-AI/Wan2.1-T2V-1.3B", dtype=torch.float16):
         super().__init__(spec)
         self.pretrained = pretrained
+        self.dtype = dtype
         self._module: Optional[nn.Module] = None
 
     def load(self, device: str = "cuda") -> nn.Module:
         if self._module is None:
             from diffusers import AutoencoderKLWan  # lazy: heavy optional dependency
 
-            self._module = AutoencoderKLWan.from_pretrained(self.pretrained, subfolder="vae").to(device).eval()
+            kwargs = {"torch_dtype": self.dtype}
+            self._module = AutoencoderKLWan.from_pretrained(
+                self.pretrained, subfolder="vae", **kwargs
+            ).to(device).eval()
             for param in self._module.parameters():
                 param.requires_grad_(False)
         return self._module
@@ -127,8 +139,14 @@ class WanVideoVAE(VideoVAEBackend):
     @torch.no_grad()
     def posterior_mean(self, video: torch.Tensor) -> torch.Tensor:
         module = self.load(video.device.type if video.device.type != "cpu" else "cpu")
-        posterior = module.encode(video).latent_dist
-        return posterior.mean
+        target = next(module.parameters()).dtype
+        return module.encode(video.to(dtype=target)).latent_dist.mean.float()
+
+    @torch.no_grad()
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        module = self.load(latent.device.type if latent.device.type != "cpu" else "cpu")
+        target = next(module.parameters()).dtype
+        return module.decode(latent.to(dtype=target)).sample.float()
 
 
 class DiTFinalLatentExtractor(nn.Module):

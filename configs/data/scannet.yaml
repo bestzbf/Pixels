@@ -1,0 +1,24 @@
+# ScanNet (v2 dense) as the local training pool for L4AR.
+# Produces clips with metric 4D GT (world point maps, cameras, depths) from colour/depth/pose frames:
+#   python tools/prepare_scannet.py --root <scannet> --out data/scannet --split scannetv2_train.txt
+#   python tools/precompute_latents.py --data configs/data/scannet.yaml
+root: data/scannet                      # where prepare_scannet.py writes clips/ gt/ manifest.jsonl
+manifest: data/scannet/manifest.jsonl
+latent_cache: data/scannet/latents
+scannet_root: null                      # <- set to the local ScanNet directory (e.g. a mounted share)
+split_file: null                        # <- scannetv2_train.txt when you want the official split
+
+datasets: [scannet]
+target_clips: 1143                      # the paper's final-stage pool size
+split: train
+frames: 21                              # Wan temporal compression 4 -> Tz = 1 + 20/4 = 6 latent frames
+resolution: [192, 256]
+clip_stride: 21
+frame_stride: 1
+vae_backend: wan                        # frozen Wan2.1 VAE, shared latent space of the Wan family
+
+held_out: [text4d200, i4d200, 7scenes_eval, nrgbd_eval]
+notes: >
+  ScanNet scenes are static, so clips carry camera motion rather than object motion; the geometry
+  supervision (Eq. 7) is unchanged, but temporal-stability numbers are not comparable with the paper's
+  dynamic-clip training pool. Add a dynamic dataset (e.g. KITTI/OMNI/DY-4D layers) for that.

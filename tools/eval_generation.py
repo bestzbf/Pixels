@@ -17,6 +17,7 @@ import torch
 
 from l4d.eval.baselines import CLAIMED_HEADLINE_GAINS, TABLE_1_REFERENCE, dino_f1_gains
 from l4d.eval.projection_metrics import (
+    DINOv2HubExtractor,
     DinoV2Extractor,
     OffAxisProtocol,
     ProjectionEvaluator,
@@ -70,7 +71,10 @@ def main() -> None:
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--cases", default=None, help="directory of cached generated-latent cases")
     parser.add_argument("--synthetic", type=int, default=0, help="run N synthetic cases (offline protocol check)")
-    parser.add_argument("--extractor", default="surrogate", choices=["surrogate", "dinov2"])
+    parser.add_argument("--extractor", default="surrogate", choices=["surrogate", "dinov2", "dinov2-hub"])
+    parser.add_argument("--dinov2-dir", default="/mnt/data/pixels-weights/dinov2-base")
+    parser.add_argument("--clip-dir", default="/mnt/data/pixels-weights/clip-vit-large-patch14")
+    parser.add_argument("--no-clip", action="store_true", help="skip the two CLIP columns (Text CLIP, CLIP-I)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
@@ -91,9 +95,22 @@ def main() -> None:
         if not cases:
             raise SystemExit(f"no cases found in {args.cases or eval_cfg['cases_dir']} (use --synthetic for an offline run)")
 
-    extractor = SurrogateExtractor(device=args.device) if args.extractor == "surrogate" else DinoV2Extractor(device=args.device)
+    if args.extractor == "surrogate":
+        extractor = SurrogateExtractor(device=args.device)
+    elif args.extractor == "dinov2":
+        extractor = DinoV2Extractor(variant=args.dinov2_dir, device=args.device)
+    else:
+        extractor = DINOv2HubExtractor(device=args.device)
+    scorers = None
+    if not args.no_clip and args.extractor != "surrogate":
+        from l4d.eval.projection_metrics import ClipScorers
+
+        scorers = ClipScorers(model_dir=args.clip_dir, device=args.device)
     evaluator = ProjectionEvaluator(
-        extractor, protocol=OffAxisProtocol(image_size=int(eval_cfg.get("image_size", 336)))
+        extractor,
+        clip_text_scorer=None if scorers is None else scorers.text_to_image,
+        clip_image_scorer=None if scorers is None else scorers.image_to_image,
+        protocol=OffAxisProtocol(image_size=int(eval_cfg.get("image_size", 336)), patch=extractor.stride),
     )
     scores = []
     for case, points, reference, text in run_ours(model, cases, args.device):

@@ -166,10 +166,18 @@ def main() -> None:
 
     model = build_model_from_config(model_cfg).to(device)
     init = model_cfg.get("pretrained_init", {})
-    if init.get("checkpoint"):
+    checkpoint = init.get("checkpoint")
+    if checkpoint and not os.path.exists(checkpoint):
+        print(
+            f"WARNING: 4RC init weights absent ({checkpoint}) - continuing with random initialisation. "
+            "Structure and training dynamics are still valid; the paper's numbers are not comparable until "
+            "the pretrained hierarchy is fetched (see scripts/fetch_weights.sh).",
+            flush=True,
+        )
+    elif checkpoint:
         from l4d.models.l4ar import load_4rc_init
 
-        print("4RC init:", json.dumps(load_4rc_init(model, init["checkpoint"], bool(init.get("strict", False)))), flush=True)
+        print("4RC init:", json.dumps(load_4rc_init(model, checkpoint, bool(init.get("strict", False)))), flush=True)
     stages = train_cfg["stages"]
     if args.stage:
         stages = [stage for stage in stages if stage["name"] == args.stage]

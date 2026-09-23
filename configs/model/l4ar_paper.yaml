@@ -23,17 +23,23 @@ model:
   use_time_tokens: true    # frozen time tokens    }
   vae:
     name: wan2.1-vae
-    checkpoint_id: Wan-AI/Wan2.1-T2V-1.3B
+    backend: wan
+    checkpoint_id: /mnt/data/pixels-weights/wan-vae   # ModelScope Wan2.1-T2V-1.3B-Diffusers, vae/ subfolder
     channels: 16
     spatial_compression: 8
     temporal_compression: 4
-    scaling: 1.0           # verify: Wan latent normalization constants
+    scaling: 1.0
     shift: 0.0
     layout: "B,C,T,H,W"
+    latents_mean: [-0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508, 0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921]
+    latents_std: [2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743, 3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.916]
 
 pretrained_init:
   source: 4RC               # initialize hierarchy + heads from the pretrained 4D reconstructor
-  checkpoint: null          # path to 4RC weights (set locally; not redistributed)
+  # Luo-Yihang/4RC on the HF mirror = "4RC: 4D Reconstruction via Conditional Querying Anytime and
+  # Anywhere", arXiv:2602.10094 -- the paper's (Luo et al. 2026). 6.08 GB, single safetensors.
+  repo: Luo-Yihang/4RC
+  checkpoint: /mnt/data/pixels-weights/4rc/model.safetensors
   strict: false
   adapter_from_4rc_aligned_latent: true   # paper: "Starting from a 4RC-aligned latent adapter"
 

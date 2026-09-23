@@ -1,6 +1,7 @@
 """Projection-based generation metrics: two off-axis views, DINO global / valid-patch match / set F1, CLIP."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -51,7 +52,34 @@ class SurrogateExtractor(FeatureExtractor):
 
 
 class DinoV2Extractor(FeatureExtractor):
-    """Real DINOv2 backbone (torch.hub), loaded lazily."""
+    """DINOv2 backbone, loaded from a local HF snapshot (torch.hub needs github.com, often blocked)."""
+
+    def __init__(self, variant: str = "dinov2-base", device: str = "cuda"):
+        self.variant = variant
+        self.stride = 14
+        self.device = device
+        self._model: Optional[torch.nn.Module] = None
+        self.name = variant
+
+    def load(self) -> torch.nn.Module:
+        if self._model is None:
+            from transformers import Dinov2Model
+
+            source = self.variant if os.path.isdir(self.variant) else f"facebook/{self.variant}"
+            self._model = Dinov2Model.from_pretrained(source).to(self.device).eval()
+        return self._model
+
+    @torch.no_grad()
+    def __call__(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        model = self.load()
+        out = model(images.to(next(model.parameters()).device))
+        cls = out.last_hidden_state[:, 0]
+        patches = out.last_hidden_state[:, 1:]
+        return F.normalize(cls, dim=-1), F.normalize(patches, dim=-1)
+
+
+class DINOv2HubExtractor(FeatureExtractor):
+    """Same backbone via torch.hub, kept for machines where github.com is reachable."""
 
     def __init__(self, variant: str = "dinov2_vitb14", device: str = "cuda"):
         self.variant = variant
@@ -70,6 +98,49 @@ class DinoV2Extractor(FeatureExtractor):
         model = self.load()
         out = model.forward_features(images.to(next(model.parameters()).device))
         return F.normalize(out["x_norm_clstoken"], dim=-1), F.normalize(out["x_norm_patchtokens"], dim=-1)
+
+
+CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
+CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
+
+
+class ClipScorers:
+    """Text-CLIP and CLIP-I scorers for Table 1 (cosine similarity, x100).
+
+    `text_to_image` is called as scorer(text, image) and `image_to_image` as scorer(image_a, image_b),
+    matching the hooks `ProjectionEvaluator` expects. Images are (3,H,W) floats in [0,1].
+    """
+
+    def __init__(self, model_dir: str = "clip-vit-large-patch14", device: str = "cuda"):
+        from transformers import CLIPModel, CLIPProcessor
+
+        source = model_dir if os.path.isdir(model_dir) else f"openai/{model_dir}"
+        self.device = device
+        self.model = CLIPModel.from_pretrained(source).to(device).eval()
+        self.processor = CLIPProcessor.from_pretrained(source)
+        for param in self.model.parameters():
+            param.requires_grad_(False)
+
+    def _prepare(self, image: torch.Tensor) -> torch.Tensor:
+        resized = F.interpolate(image.unsqueeze(0), size=(224, 224), mode="bicubic", align_corners=False)
+        mean = torch.tensor(CLIP_MEAN, device=resized.device).view(1, 3, 1, 1)
+        std = torch.tensor(CLIP_STD, device=resized.device).view(1, 3, 1, 1)
+        return (resized - mean) / std
+
+    @torch.no_grad()
+    def text_to_image(self, text: str, image: torch.Tensor) -> float:
+        encoded = self.processor(text=[text], return_tensors="pt", padding=True, truncation=True)
+        kwargs = {key: encoded[key].to(self.device) for key in ("input_ids", "attention_mask") if key in encoded}
+        text_features = F.normalize(self.model.get_text_features(**kwargs), dim=-1)
+        image_features = F.normalize(self.model.get_image_features(pixel_values=self._prepare(image).to(self.device)), dim=-1)
+        return float(F.cosine_similarity(text_features, image_features, dim=-1)) * 100.0
+
+    @torch.no_grad()
+    def image_to_image(self, first: torch.Tensor, second: torch.Tensor) -> float:
+        batch = torch.cat([self._prepare(first), self._prepare(second)], dim=0).to(self.device)
+        features = self.model.get_image_features(pixel_values=batch)
+        features = F.normalize(features, dim=-1)
+        return float(F.cosine_similarity(features[0], features[1], dim=-1)) * 100.0
 
 
 def render_off_axis_views(

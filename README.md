@@ -99,3 +99,10 @@ python tools/eval_generation.py --eval configs/eval/text4d200.yaml --checkpoint 
 * 待补：4RC 权重与真实维度、6 个数据集清单与 1,143 clips 划分、Text4D-200/I4D-200 用例锁、
   各阶段超参 —— 均已在 `docs/PAPER_ANALYSIS.md` 第 8 节以「开放问题」列出并在 YAML 中以 `verify` 标注。
   v1 PDF 无附录，这些量需等作者补充材料或按 `REPRODUCTION_PLAN.md` 的替代方案确定。
+
+## 本机实跑（GPU / 权重 / ScanNet）
+
+见 [`docs/RUN_ON_THIS_MACHINE.md`](docs/RUN_ON_THIS_MACHINE.md)：驱动 535 与 cu130 wheel 不匹配的诊断与
+`scripts/fix_gpu.sh`；ModelScope 通道拉到的真实冻结 Wan VAE（含官方 16 维 `latents_mean/std`，已写入配置）；
+`l4d/data/scannet.py` + `tools/prepare_scannet.py` 的 ScanNet 接入层；以及三阶段 GPU 训练实测
+（stage1 7.52→5.45、stage2 6.75→5.22、stage3 5.62→4.66）。

@@ -1,0 +1,10 @@
+# ScanNet-format clips at a resolution the probe model can afford on one 24 GB card.
+manifest: data/scannet/manifest.jsonl
+root: data/scannet
+latent_cache: data/scannet/latents
+datasets: [scannet]
+split: train
+frames: 21
+resolution: [96, 128]
+batch_size: 1
+vae_backend: wan
