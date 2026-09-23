@@ -1,0 +1,20 @@
+# Small stand-in used for CPU smoke tests and CI; identical structure, reduced widths.
+_base_: l4ar_paper.yaml
+
+model:
+  token_dim: 64
+  heads: 4
+  depth: 5
+  patch_size: 2
+  align_kernel: [1, 2, 2]
+  tap_after: [1, 4]
+  lora_rank: 4
+  geometry_hidden: 32
+  camera_hidden: 32
+  vae:
+    backend: synthetic     # deterministic conv VAE, no Wan weights needed
+    channels: 16
+
+pretrained_init:
+  source: none
+  checkpoint: null

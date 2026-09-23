@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixels-latent-to-4d"
+version = "0.1.0"
+description = "Reproduction framework for 'Beyond Pixels: From Video Priors to 4D Worlds' (arXiv:2608.10744)"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "numpy", "pyyaml", "pillow", "tqdm"]
+
+[project.optional-dependencies]
+generation = ["diffusers>=0.31", "transformers>=4.40", "open_clip_torch", "opencv-python"]
+
+[tool.setuptools.packages.find]
+include = ["l4d*"]

@@ -1,0 +1,7 @@
+# Offline CPU/GPU smoke dataset: analytic synthetic clips, no downloads required.
+backend: synthetic
+size: 4
+frames: 21
+height: 32
+width: 40
+batch_size: 2

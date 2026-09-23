@@ -1,0 +1,12 @@
+# Table 3 protocol: component ablation measured on ground-truth reconstruction benchmarks.
+benchmarks:
+  7scenes: {sequences: 18, unit: cm}
+  nrgbd: {sequences: 9, unit: cm}
+metrics: [Acc, Comp, NC]
+thresholds: {acc_comp_cm: 5.0, normal_angle_deg: 30.0}   # verify: matched protocol is appendix-only
+variants: [Full, "w/o Grid", "w/o 3D Conv", "w/o Frame", "w/o Global"]
+clips: 1143          # ablations use the same matched training protocol as the full model
+notes: >
+  Every removal must degrade both benchmarks, with the largest drops from removing the 3D convolution
+  or either attention scope. The paper's own table shows "w/o Grid" close to Full, so treat that row as
+  a protocol-sensitivity check rather than a design proof.

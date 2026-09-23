@@ -1,0 +1,17 @@
+# artifacts / local state
+/runs/
+/data/
+/weights/
+*.pt
+*.pth
+*.npy
+*.npz
+*.ply
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# paper source is fetched, not redistributed (see scripts/fetch_paper.sh)
+paper_2608.10744.pdf
+paper_main_text.txt
+paper_html_text.txt

@@ -1,0 +1,15 @@
+# Locked 200-case generation benchmarks (paper Table 1). Cases are cached DiT latents + the decoded
+# RGB used only as evaluation reference / colouring, never as geometric input.
+benchmark: text4d200
+cases_dir: data/benchmarks/text4d200/cases      # one .pt per case: {case_id, latent, reference_rgb, text}
+lock_file: data/benchmarks/text4d200/lock.json   # case ids + sha256 of each case, built by tools/build_benchmark.py
+reference_row: Ours (Wan2.1-1.3B)
+matched_cascade: Wan2.1-1.3B + 4RC
+generators: [Wan2.1-T2V-14B, Wan2.1-T2V-1.3B]    # one checkpoint serves both, unchanged
+image_size: 336                 # verify: render resolution expected by DINO/CLIP encoders
+views: 2                        # paper: two off-axis cameras per sequence
+extractor: dinov2_vitb14        # verify: appendix names the projection encoder
+dino_f1_threshold: 0.65         # verify: patch match gate
+claim_check:
+  metric: dino_f1
+  expected_gain_over_matched_cascade: [2.88, 3.45]

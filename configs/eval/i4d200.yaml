@@ -1,0 +1,15 @@
+# Locked 200-case image-conditioned benchmark (paper Table 1, Image-to-4D block).
+benchmark: i4d200
+cases_dir: data/benchmarks/i4d200/cases
+lock_file: data/benchmarks/i4d200/lock.json
+reference_row: Ours (Wan2.2-I2V-A14B)
+matched_cascade: Wan2.2-I2V-A14B + 4RC
+other_baselines: [4DNeX, "Wan2.2-I2V-A14B + pi3", "Wan2.2-I2V-A14B + Any4D"]
+generators: [Wan2.2-I2V-A14B]
+image_size: 336
+views: 2
+extractor: dinov2_vitb14
+dino_f1_threshold: 0.65
+claim_check:
+  metric: dino_f1
+  expected_gain_over_matched_cascade: 5.81

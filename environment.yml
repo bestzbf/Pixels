@@ -1,0 +1,16 @@
+name: pixels-l4d
+channels: [conda-forge, pytorch]
+dependencies:
+  - python=3.10
+  - numpy
+  - pyyaml
+  - pillow
+  - tqdm
+  - pip
+  - pip:
+      - torch>=2.1
+      # real-run extras:
+      # - diffusers>=0.31
+      # - transformers>=4.40
+      # - open_clip_torch
+      # - opencv-python

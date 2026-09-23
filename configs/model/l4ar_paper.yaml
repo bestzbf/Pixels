@@ -1,0 +1,47 @@
+# Paper-scale L4AR configuration (arXiv:2608.10744). Dimensions that the main text does not state are
+# marked `verify` and listed in docs/PAPER_ANALYSIS.md section 8.
+model:
+  token_dim: 1024          # verify: 4RC hierarchy width
+  heads: 16                # verify
+  depth: 31                # paper: "31-block refinement hierarchy"
+  mlp_ratio: 4.0
+  drop_path: 0.0           # verify
+  patch_size: 2            # verify: latent-grid -> token-grid stride of S_phi
+  align_kernel: [1, 2, 2]  # learned local 3D convolution S_phi
+  grid_mode: trilinear     # fixed resampler R
+  use_local_conv: true
+  tap_after: [6, 13, 20, 27, 30]   # verify: multi-level depths (DINOv2-style quartiles)
+  initial_frame_blocks: 1  # paper: per-frame structure first, then alternate
+  scope_policy: full       # full | frame_only (w/o Global) | global_only (w/o Frame)
+  lora_rank: 16            # paper: rank-16 LoRA on the refinement hierarchy
+  lora_alpha: 32
+  geometry_hidden: 256     # verify
+  camera_hidden: 512       # verify
+  camera_encoding_dim: 9   # paper: 9D pose-FOV camera parameterization
+  ray_space: world         # world-space ray directions (Eq. 6)
+  use_camera_tokens: true  # frozen camera tokens  } reused from 4RC
+  use_time_tokens: true    # frozen time tokens    }
+  vae:
+    name: wan2.1-vae
+    checkpoint_id: Wan-AI/Wan2.1-T2V-1.3B
+    channels: 16
+    spatial_compression: 8
+    temporal_compression: 4
+    scaling: 1.0           # verify: Wan latent normalization constants
+    shift: 0.0
+    layout: "B,C,T,H,W"
+
+pretrained_init:
+  source: 4RC               # initialize hierarchy + heads from the pretrained 4D reconstructor
+  checkpoint: null          # path to 4RC weights (set locally; not redistributed)
+  strict: false
+  adapter_from_4rc_aligned_latent: true   # paper: "Starting from a 4RC-aligned latent adapter"
+
+frozen_components:
+  - video_generators
+  - vae
+  - refinement_base_weights      # original Transformer weights
+  - camera_tokens
+  - time_tokens
+  - motion_decoder
+  - tracking_head

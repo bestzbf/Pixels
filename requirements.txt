@@ -1,0 +1,11 @@
+torch>=2.1
+numpy
+pyyaml
+pillow
+tqdm
+# optional, only for the real (non-smoke) path:
+# diffusers>=0.31        # Wan VAE / DiT pipelines
+# transformers>=4.40     # CLIP / DINOv2 tokenizers & hubs
+# open_clip_torch        # CLIP scoring
+# opencv-python          # video frame decoding
+# trimesh                # point-cloud export

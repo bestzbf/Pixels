@@ -1,0 +1,19 @@
+# Final-stage training pool: 1,143 clips from six reconstruction datasets (paper).
+# The dataset names below are placeholders to confirm against the appendix, and clip counts are
+# whatever the local manifest provides; `manifest_report` in the preprocessing tool checks the total.
+manifest: data/manifest.jsonl          # one JSON object per clip (see l4d/data/dataset.py:ClipRecord)
+root: data/clips
+latent_cache: data/latents             # frozen-VAE posterior-mean latents (precompute_latents.py)
+datasets:
+  - 7scenes
+  - nrgbd
+  - realestate10k
+  - co3d_v2
+  - dl3df
+  - omni3d_4d
+target_clips: 1143
+split: train
+held_out: [text4d200, i4d200, 7scenes_eval, nrgbd_eval]   # no test-time adaptation on any benchmark
+frames: 21                     # verify: video frames per clip (Wan temporal compression 4 -> Tz=6)
+resolution: [192, 256]         # verify
+vae_backend: wan               # synthetic | wan
