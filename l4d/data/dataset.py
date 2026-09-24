@@ -79,10 +79,12 @@ def manifest_report(records: Iterable[ClipRecord]) -> dict[str, Any]:
 class ReconstructionClips(Dataset):
     """Yields (video, gt 4D annotations); the frozen VAE encoding happens in `precompute_latents`."""
 
-    def __init__(self, records: list[ClipRecord], image_size: tuple[int, int] = (192, 256), frames: int = 21):
+    def __init__(self, records: list[ClipRecord], image_size: tuple[int, int] = (192, 256), frames: int = 21,
+                 latent_cache: "LatentCache | None" = None):
         self.records = records
         self.image_size = image_size
         self.frames = frames
+        self.latent_cache = latent_cache
 
     def __len__(self) -> int:
         return len(self.records)
@@ -113,9 +115,11 @@ class ReconstructionClips(Dataset):
         size = self.image_size if gt_depth.dim() < 3 else (int(gt_depth.shape[-2]), int(gt_depth.shape[-1]))
         frames = min(self.frames, int(gt_depth.shape[0])) if gt_depth.dim() >= 3 else self.frames
         mask = torch.from_numpy(np.asarray(payload.get("mask", np.ones(gt_depth.shape, dtype=bool))))
+        cached = self.latent_cache.load(record.clip_id) if self.latent_cache else None
         return {
             "clip_id": record.clip_id,
             "dataset": record.dataset,
+            "latent": cached if cached is None else cached.squeeze(0),  # (C,Tz,Hz,Wz) frozen VAE posterior mean
             "video": self._load_video(record, size, frames),
             "gt_points": gt_points.permute(1, 0, 4, 2, 3) if gt_points.dim() == 5 else gt_points,
             "gt_depth": gt_depth,
@@ -169,7 +173,10 @@ def collate_clips(batch: list[dict[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key in batch[0]:
         values = [item[key] for item in batch]
-        if isinstance(values[0], torch.Tensor):
+        if all(value is None for value in values):
+            out[key] = None                      # e.g. no latent cache for these clips
+            continue
+        if all(isinstance(value, torch.Tensor) for value in values):
             out[key] = torch.stack(values)
         else:
             out[key] = values

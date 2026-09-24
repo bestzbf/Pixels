@@ -177,6 +177,23 @@ courtyard 内点率 60×）。这同时验证了论文“用预训练 4D 层级�
 `.gitignore`）；**下载中的半截 4RC 文件**会让 `os.path.exists` 判为“有”而在 safetensors 处崩溃，现在降级为
 明确警告并回退随机初始化。
 
+### 训练读数修正：latent 缓存接入 + 缺失的 VAE 归一化
+
+审计训练路径时发现两处真实缺口，已修：
+
+1. `LatentCache` 之前**从未被训练读取**（`tools/precompute_latents.py` 写、训练却每步重新编码）。
+   现在 `ReconstructionClips(latent_cache=...)` → batch 带 `latent` → `training_step` 优先用缓存；
+   实测缓存与实时编码**逐元素相等（max diff 0.0）**，并有断言测试（VAE 被替换为会抛错的桩，
+   证明走的是缓存分支）。
+2. 训练侧此前**没有做 latent 归一化**。Wan 官方 `latents_mean/latents_std`（16 通道）现在
+   在 `latent_from_batch` 里统一施加，推理与训练同约定。
+
+另外测试入口 `if __name__ == "__main__": main()` 原先写在文件中段，`cat >>` 追加的用例
+根本不会被执行 —— 表现为“21/21 全绿”但实际有 26 个用例、其中 3 个从未跑过。
+runner 已移到文件末尾，现在 **26 个定义 = 26 条 pass**；那 3 个用例本身是测试写错
+（LoRA 包裹后参数名为 `attn.qkv.base.weight`；随机点云无局部法线结构故 NC 无意义；
+独立抽样下同一云两次子集不同，需按采样噪声放宽阈值）。
+
 ## 4. 待你决定
 
 1. **ScanNet 到底在哪**：要我在挂载点上跑，请执行

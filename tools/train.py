@@ -61,9 +61,18 @@ def parameter_groups(model: L4AR, base_lr: float, lora_lr_scale: float = 1.0) ->
     return groups
 
 
+def latent_from_batch(model: L4AR, vae, batch: dict, device: str) -> torch.Tensor:
+    """Cached z^obs when available, otherwise encode with the frozen VAE; always in normalised VAE space."""
+    cached = batch.get("latent")
+    latent = cached.to(device) if torch.is_tensor(cached) else vae.posterior_mean(batch["video"].to(device))
+    from l4d.models.video_interface import SharedLatentInterface
+
+    return SharedLatentInterface(model.cfg.vae).normalize(latent)
+
+
 def training_step(model: L4AR, vae, loss_fn: LatentTo4DLoss, batch: dict, device: str) -> tuple[dict, torch.Tensor]:
     video = batch["video"].to(device)
-    latent = vae.posterior_mean(video)
+    latent = latent_from_batch(model, vae, batch, device)
     grid, output_size = temporal_grid(model, latent, video)
     prediction = model(latent, grid=grid, output_size=output_size)
     ground_truth = {
@@ -84,6 +93,12 @@ def summarize(losses: dict) -> str:
 
 
 def build_dataloader(data_cfg: dict) -> DataLoader:
+    cache_root = data_cfg.get("latent_cache")
+    cache = None
+    if cache_root and os.path.isdir(cache_root):
+        from l4d.data.dataset import LatentCache
+
+        cache = LatentCache(cache_root)
     if data_cfg.get("backend", "manifest") == "synthetic":
         dataset: Dataset = SyntheticClips(
             size=int(data_cfg.get("size", 4)),
@@ -95,8 +110,16 @@ def build_dataloader(data_cfg: dict) -> DataLoader:
         records = load_manifest(data_cfg["manifest"], split=data_cfg.get("split"))
         print("manifest:", json.dumps(manifest_report(records)), flush=True)
         dataset = ReconstructionClips(
-            records, image_size=tuple(data_cfg.get("resolution", (192, 256))), frames=int(data_cfg.get("frames", 21))
+            records,
+            image_size=tuple(data_cfg.get("resolution", (192, 256))),
+            frames=int(data_cfg["frames"]),
+            latent_cache=cache,
         )
+        if cache is not None:
+            ids = [record.clip_id for record in records]
+            missing = cache.missing(ids)
+            print(f"latents: {len(ids) - len(missing)}/{len(ids)} from cache {cache.root} "
+                  f"({len(missing)} encoded on the fly)", flush=True)
     return DataLoader(dataset, batch_size=int(data_cfg.get("batch_size", 2)), shuffle=True, collate_fn=collate_clips)
 
 
