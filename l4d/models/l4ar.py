@@ -214,24 +214,18 @@ def build_l4ar(config: dict[str, Any] | L4ARConfig) -> L4AR:
     return L4AR(cfg)
 
 
-def load_4rc_init(model: "L4AR", checkpoint: str, strict: bool = False) -> dict[str, int]:
-    """Best-effort initialisation of the refinement hierarchy and heads from 4RC weights.
+def load_4rc_init(model: "L4AR", checkpoint: str, strict: bool = False) -> dict[str, Any]:
+    """Initialise the refinement hierarchy from a 4RC checkpoint.
 
-    Key remapping is namespace-based: any checkpoint entry whose name suffix matches a parameter of
-    `model.refinement` or `model.decoder` is copied over, everything else (motion decoder, tracking
-    head, RGB encoder stem, ...) is reported as ignored.
+    4RC's backbone is a CroCo/DINOv2-style stack (`blocks.N.attn.qkv`, `mlp.fc1`, `norm1`...), so the
+    same key normalisation used for a plain ViT applies, including looking through our LoRA wrappers to
+    reach `base.weight`. Its DualDPT / CameraDec internals differ in shape from our heads, so head
+    tensors are reported as unmapped rather than silently forced.
     """
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    state = state.get("model", state) if isinstance(state, dict) else state
-    own = dict(model.named_parameters())
-    matched: dict[str, torch.Tensor] = {}
-    for name, tensor in state.items():
-        candidate = name.removeprefix("model.").removeprefix("module.")
-        for prefix in ("refinement.", "decoder."):
-            target = prefix + candidate.split("backbone.")[-1] if "backbone." in candidate else prefix + candidate
-            if target in own and own[target].shape == tensor.shape:
-                matched[target] = tensor
-                break
-    own.update(matched)
-    model.load_state_dict(own, strict=strict)
-    return {"copied": len(matched), "model_params": len(own), "checkpoint_entries": len(state)}
+    from .init_from import load_vit_into_refinement
+
+    report = load_vit_into_refinement(model.refinement, checkpoint, max_blocks=model.cfg.depth)
+    report["unmapped"] = "heads (DualDPT/CameraDec layouts differ); align manually if transferring them"
+    if strict:
+        raise ValueError("strict=True is unsupported for foreign head layouts: only backbone blocks map cleanly")
+    return report
