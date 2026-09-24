@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Table 3: component ablation on the ground-truth benchmarks (7-Scenes / NRGBD).
+"""Table 3: component ablation, on the paper's 7-Scenes / NRGBD protocol or on any local clip pool.
 
+    # the paper's benchmarks
     python tools/eval_gt.py --benchmark 7scenes --variants Full "w/o 3D Conv" "w/o Frame" "w/o Global" "w/o Grid"
+    # whatever real data is actually on this machine (ScanNet until it arrives)
+    python tools/eval_gt.py --data configs/data/real.yaml --model configs/model/l4ar_probe.yaml \
+        --checkpoint runs/gpu_real_4rc_camdec/stage3_lora.pt --benchmark local
 """
 from __future__ import annotations
 
@@ -15,11 +19,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 
-from l4d.data.dataset import SyntheticClips
-from l4d.eval.gt_metrics import NRGBD, SEVEN_SCENES, evaluate_prediction
+from l4d.data.dataset import ReconstructionClips, SyntheticClips, load_manifest
+from l4d.eval.gt_metrics import GTBenchmark, NRGBD, SEVEN_SCENES, evaluate_prediction
 from l4d.eval.protocol import TABLE_3_REFERENCE, TABLE_3_VARIANTS
 from l4d.models.l4ar import L4ARConfig, build_l4ar
-from l4d.models.video_interface import SyntheticVideoVAE
+from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
 from l4d.utils.config import load_config
 
 BENCHMARKS = {B.name: B for B in (SEVEN_SCENES, NRGBD)}
@@ -39,13 +43,20 @@ def build_variant(model_cfg: dict, variant: str, device: str, checkpoint: str | 
 
 
 @torch.no_grad()
-def evaluate_variant(model, vae, dataset: SyntheticClips, benchmark, device: str, threshold_cm: float) -> dict[str, float]:
+def evaluate_variant(model, vae, dataset, benchmark, device: str, threshold_cm: float) -> dict[str, float]:
+    from l4d.models.video_interface import SharedLatentInterface
+
+    interface = SharedLatentInterface(model.cfg.vae)
     accumulates = {"Acc": [], "Comp": [], "NC": []}
     for index in range(len(dataset)):
         sample = dataset[index]
         video = sample["video"].unsqueeze(0).to(device)
-        latent = vae.posterior_mean(video)
-        out = model(latent)
+        latent = sample["latent"].unsqueeze(0).to(device) if torch.is_tensor(sample.get("latent")) \
+            else vae.posterior_mean(video)
+        latent = interface.normalize(latent)
+        frames = video.shape[2]
+        grid = (frames, max(latent.shape[3] // model.cfg.patch_size, 1), max(latent.shape[4] // model.cfg.patch_size, 1))
+        out = model(latent, grid=grid, output_size=(video.shape[3], video.shape[4]))
         frames = min(out["points"].shape[1], sample["gt_points"].shape[0])
         prediction = out["points"][0, :frames]
         ground_truth = sample["gt_points"][:frames]
@@ -59,8 +70,9 @@ def evaluate_variant(model, vae, dataset: SyntheticClips, benchmark, device: str
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="configs/model/l4ar_tiny.yaml")
+    parser.add_argument("--data", default=None, help="clip pool yaml (e.g. configs/data/real.yaml); omit for synthetic")
     parser.add_argument("--checkpoint", default=None)
-    parser.add_argument("--benchmark", default="7scenes", choices=sorted(BENCHMARKS))
+    parser.add_argument("--benchmark", default="7scenes", help="7scenes | nrgbd | any local pool name")
     parser.add_argument("--variants", nargs="+", default=list(TABLE_3_VARIANTS), choices=list(TABLE_3_VARIANTS))
     parser.add_argument("--clips", type=int, default=2)
     parser.add_argument("--threshold-cm", type=float, default=5.0)
@@ -69,17 +81,29 @@ def main() -> None:
     args = parser.parse_args()
 
     model_cfg = load_config(args.model).to_dict()
-    vae = SyntheticVideoVAE(L4ARConfig.from_dict(model_cfg["model"]).vae)
-    dataset = SyntheticClips(size=args.clips, frames=21, height=32, width=40)
-    benchmark = BENCHMARKS[args.benchmark]
+    spec = L4ARConfig.from_dict(model_cfg["model"]).vae
+    if args.data:
+        data_cfg = load_config(args.data).to_dict()
+        backend = model_cfg["model"]["vae"].get("backend", "wan")
+        vae = (SyntheticVideoVAE(spec) if backend == "synthetic"
+               else WanVideoVAE(spec, pretrained=spec.checkpoint_id))
+        records = load_manifest(data_cfg["manifest"], split=data_cfg.get("split"))
+        dataset = ReconstructionClips(
+            records, image_size=tuple(data_cfg["resolution"]), frames=int(data_cfg["frames"])
+        )
+    else:
+        vae = SyntheticVideoVAE(spec)
+        dataset = SyntheticClips(size=args.clips, frames=21, height=32, width=40)
+    benchmark = BENCHMARKS.get(args.benchmark) or GTBenchmark(args.benchmark, sequences=len(dataset))
     rows = {}
     for variant in args.variants:
         model = build_variant(model_cfg, variant, args.device, args.checkpoint)
         metrics = evaluate_variant(model, vae, dataset, benchmark, args.device, args.threshold_cm)
         rows[variant] = metrics
-        reference = TABLE_3_REFERENCE[variant][args.benchmark]
-        print(f"{variant:14s} Acc={metrics['Acc']:.3f} Comp={metrics['Comp']:.3f} NC={metrics['NC']:.3f} "
-              f"| paper Acc={reference['Acc']:.3f} Comp={reference['Comp']:.3f} NC={reference['NC']:.3f}")
+        reference = TABLE_3_REFERENCE.get(variant, {}).get(args.benchmark)
+        paper = (f"| paper Acc={reference['Acc']:.3f} Comp={reference['Comp']:.3f} NC={reference['NC']:.3f}"
+                 if reference else "| (local pool: no paper reference row)")
+        print(f"{variant:14s} Acc={metrics['Acc']:.3f} Comp={metrics['Comp']:.3f} NC={metrics['NC']:.3f} {paper}")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump({"benchmark": args.benchmark, "rows": rows, "reference": TABLE_3_REFERENCE}, fh, indent=2)

@@ -76,6 +76,12 @@ def evaluate_prediction(
     threshold_cm: float = 5.0,
 ) -> dict[str, float]:
     """Aligns scale, then reports Acc / Comp (cm) and NC for one sequence."""
+    pred_points = pred_points.detach().cpu().float()
+    gt_points = gt_points.detach().cpu().float()
+    if pred_normals is not None:
+        pred_normals = pred_normals.detach().cpu().float()
+    if gt_normals is not None:
+        gt_normals = gt_normals.detach().cpu().float()
     scale = (gt_points.norm(dim=-1).mean() / pred_points.norm(dim=-1).mean().clamp(min=1e-8)).clamp(1e-3, 1e3)
     aligned = pred_points * scale
     if pred_normals is None:
