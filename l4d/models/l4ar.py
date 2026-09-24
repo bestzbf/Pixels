@@ -70,6 +70,7 @@ class L4ARConfig:
     camera_hidden: int = 512
     camera_encoding_dim: int = 9
     ray_space: str = "world"
+    camera_layout: str = "mlp"     # "cam_dec" mirrors 4RC's CameraDec so its weights transfer
     use_camera_tokens: bool = True
     use_time_tokens: bool = True
     vae: VAESpec = field(default_factory=VAESpec)
@@ -123,6 +124,7 @@ class L4AR(nn.Module):
             camera_hidden=cfg.camera_hidden,
             camera_encoding_dim=cfg.camera_encoding_dim,
             ray_space=cfg.ray_space,
+            camera_layout=cfg.camera_layout,
         )
         self.trainable_stage = 3
         self.freeze_pretrained()
@@ -219,13 +221,29 @@ def load_4rc_init(model: "L4AR", checkpoint: str, strict: bool = False) -> dict[
 
     4RC's backbone is a CroCo/DINOv2-style stack (`blocks.N.attn.qkv`, `mlp.fc1`, `norm1`...), so the
     same key normalisation used for a plain ViT applies, including looking through our LoRA wrappers to
-    reach `base.weight`. Its DualDPT / CameraDec internals differ in shape from our heads, so head
-    tensors are reported as unmapped rather than silently forced.
+    reach `base.weight`. With `camera_layout="cam_dec"` the camera head mirrors 4RC's CameraDec layer
+    for layer, so its ten tensors transfer by name too; the DualDPT geometry head is not shape-compatible
+    and stays reported as unmapped rather than being forced.
     """
-    from .init_from import load_vit_into_refinement
+    from .init_from import load_pretrained_vit, load_vit_into_refinement
 
     report = load_vit_into_refinement(model.refinement, checkpoint, max_blocks=model.cfg.depth)
-    report["unmapped"] = "heads (DualDPT/CameraDec layouts differ); align manually if transferring them"
+    if model.cfg.camera_layout == "cam_dec":
+        head = model.decoder.camera_head
+        own = dict(head.named_parameters())
+        state = load_pretrained_vit(checkpoint)
+        mapped: dict[str, Any] = {}
+        for key, value in state.items():
+            if not key.startswith("cam_dec."):
+                continue
+            target = key[len("cam_dec."):]
+            if target in own and tuple(own[target].shape) == tuple(value.shape):
+                mapped[target] = value.float()
+        if mapped:
+            head.load_state_dict(mapped, strict=False)
+        report["camera_head_copied"] = len(mapped)
+        report["camera_head_params"] = len(own)
+    report["unmapped"] = "geometry head (DualDPT internals differ); align manually if transferring them"
     if strict:
         raise ValueError("strict=True is unsupported for foreign head layouts: only backbone blocks map cleanly")
     return report

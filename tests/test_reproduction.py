@@ -412,5 +412,62 @@ def test_source_layernorm_gains_transfer_unchanged(tmp_path: str = "/tmp/pixels_
     assert report["min_mean_gain"] == 0.01 and report["max_mean_gain"] == 1.02, report
 
 
+
+
+def test_cam_dec_camera_head_transfers_by_name(tmp_path: str = "/tmp/pixels_camdec"):
+    """The layout exists so 4RC's pretrained camera head loads without a rename table."""
+    import os
+    import shutil
+
+    from safetensors.torch import save_file
+
+    from l4d.models.l4ar import load_4rc_init
+
+    cfg = L4ARConfig(**{**TINY, "token_dim": 64, "depth": 2, "camera_layout": "cam_dec"})
+    net = build_l4ar(cfg)
+    width = cfg.token_dim * 2
+    source = {
+        "backbone.pretrained.blocks.0.attn.qkv.weight": torch.randn(3 * width, width),
+        "backbone.pretrained.blocks.1.attn.qkv.weight": torch.randn(3 * width, width),
+        "cam_dec.backbone.0.weight": torch.randn(width, width),
+        "cam_dec.backbone.0.bias": torch.randn(width),
+        "cam_dec.backbone.2.weight": torch.randn(width, width),
+        "cam_dec.backbone.2.bias": torch.randn(width),
+        "cam_dec.fc_t.weight": torch.randn(3, width),
+        "cam_dec.fc_t.bias": torch.randn(3),
+        "cam_dec.fc_qvec.weight": torch.randn(4, width),
+        "cam_dec.fc_qvec.bias": torch.randn(4),
+        "cam_dec.fc_fov.0.weight": torch.randn(2, width),
+        "cam_dec.fc_fov.0.bias": torch.randn(2),
+    }
+    shutil.rmtree(tmp_path, ignore_errors=True)
+    os.makedirs(tmp_path)
+    save_file({key: value.contiguous() for key, value in source.items()}, os.path.join(tmp_path, "model.safetensors"))
+    report = load_4rc_init(net, tmp_path)
+    assert report["camera_head_copied"] == 10, report
+    head = net.decoder.camera_head.state_dict()
+    assert torch.equal(head["fc_qvec.weight"], source["cam_dec.fc_qvec.weight"])
+    assert torch.equal(head["backbone.0.weight"], source["cam_dec.backbone.0.weight"])
+
+
+def test_checkpoint_load_reports_tensors_the_model_dropped(tmp_path: str = "/tmp/pixels_ckpt_drop"):
+    """A trainable-only checkpoint restored into a changed architecture must say so out loud."""
+    import os
+    import shutil
+
+    from l4d.utils.checkpoint import load_checkpoint, save_checkpoint
+
+    net = build_l4ar(L4ARConfig(**TINY))
+    net.set_stage(3)
+    shutil.rmtree(tmp_path, ignore_errors=True)
+    os.makedirs(tmp_path, exist_ok=True)
+    path = os.path.join(tmp_path, "s.pt")
+    save_checkpoint(path, net, {}, {})
+    renamed = {f"renamed.{key}": value for key, value in torch.load(path, weights_only=False)["model"].items()}
+    torch.save({"model": renamed, "model_kind": "trainable-only", "init_source": "random"}, path)
+    report = load_checkpoint(build_l4ar(L4ARConfig(**TINY)), path)
+    assert report.get("dropped_tensors"), report
+
+
 if __name__ == "__main__":
     main()

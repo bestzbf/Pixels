@@ -51,7 +51,15 @@ def save_checkpoint(path: str, model: torch.nn.Module, config: dict, stage: dict
 def load_checkpoint(model: torch.nn.Module, path: str, device: str = "cpu", tolerance: float = 2e-3) -> dict:
     """Restores a checkpoint and reports whether the frozen backbone still matches what trained."""
     state = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(state.get("model", state), strict=False)
+    saved_state = state.get("model", state)
+    model.load_state_dict(saved_state, strict=False)
+    # A trainable-only checkpoint restored into a changed architecture would otherwise lose its trained
+    # heads silently: report any stored tensor the model no longer has.
+    target = dict(model.state_dict())
+    dropped = [name for name in saved_state if name not in target]
+    if dropped:
+        result = {"kind": state.get("model_kind", "legacy-full"), "frozen_mismatch": [], "dropped_tensors": dropped[:8]}
+        return result
     saved = state.get("frozen_fingerprint") or {}
     if not saved or state.get("model_kind") == "full":
         return {"kind": state.get("model_kind", "legacy-full"), "frozen_mismatch": []}

@@ -85,21 +85,40 @@ class GeometryHead(nn.Module):
 
 
 class CameraHead(nn.Module):
-    """9D pose-FOV camera encoding per frame, from the per-frame camera-token states."""
+    """9D pose-FOV camera encoding per frame: [translation(3), quaternion(4), fov(2)].
 
-    def __init__(self, token_dim: int, hidden: int = 512, encoding_dim: int = 9):
+    `layout="cam_dec"` mirrors 4RC's CameraDec exactly - two Linear/ReLU blocks at dim_in followed by
+    fc_t / fc_qvec / fc_fov(Linear+ReLU) - so its pretrained weights transfer by name. With dim_in equal
+    to the concatenated frame++global token width (2 * token_dim), that is the same 3072 the upstream
+    decoder sees. `layout="mlp"` keeps the compact locally-trainable variant.
+    """
+
+    def __init__(self, token_dim: int, hidden: int = 512, encoding_dim: int = 9, layout: str = "mlp"):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(token_dim, hidden),
-            nn.LayerNorm(hidden),
-            nn.GELU(),
-            nn.Linear(hidden, hidden),
-            nn.LayerNorm(hidden),
-            nn.GELU(),
-        )
-        self.out = nn.Linear(hidden, encoding_dim)
-        nn.init.zeros_(self.out.weight)
-        nn.init.zeros_(self.out.bias)
+        assert layout in {"mlp", "cam_dec"}
+        self.layout = layout
+        if layout == "cam_dec":
+            width = token_dim
+            self.backbone = nn.Sequential(nn.Linear(width, width), nn.ReLU(), nn.Linear(width, width), nn.ReLU())
+            self.fc_t = nn.Linear(width, 3)
+            self.fc_qvec = nn.Linear(width, 4)
+            self.fc_fov = nn.Sequential(nn.Linear(width, 2), nn.ReLU())
+            self.out = None
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(token_dim, hidden),
+                nn.LayerNorm(hidden),
+                nn.GELU(),
+                nn.Linear(hidden, hidden),
+                nn.LayerNorm(hidden),
+                nn.GELU(),
+            )
+            self.out = nn.Linear(hidden, encoding_dim)
+            nn.init.zeros_(self.out.weight)
+            nn.init.zeros_(self.out.bias)
 
-    def forward(self, camera_tokens: torch.Tensor) -> torch.Tensor:
-        return self.out(self.mlp(camera_tokens))
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if self.layout == "cam_dec":
+            hidden = self.backbone(features)
+            return torch.cat([self.fc_t(hidden), self.fc_qvec(hidden), self.fc_fov(hidden)], dim=-1)
+        return self.out(self.mlp(features))

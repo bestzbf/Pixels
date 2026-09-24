@@ -27,6 +27,7 @@ model:
   lora_alpha: 32
   geometry_hidden: 256         # DualDPT features=256
   camera_hidden: 512       # upstream CameraDec hides at dim_in/2; not stated for our variant
+  camera_layout: cam_dec          # mirror 4RC CameraDec so its fc_t/fc_qvec/fc_fov transfer by name
   camera_encoding_dim: 9       # verified: translation(3)+quaternion(4)+fov(2), ReLU on fov
   ray_space: world         # world-space ray directions (Eq. 6)
   use_camera_tokens: true  # 4RC cat_token=True

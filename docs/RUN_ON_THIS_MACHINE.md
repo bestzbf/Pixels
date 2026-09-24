@@ -37,8 +37,17 @@ SwiGLU `mlp.w12 (8192,1536)/w3 (1536,4096)` ⇒ FFN 隐层 4096=8/3·d）、`mot
 
 据此：`mlp_ratio` 从猜测 4.0 改为 **8/3**，否则 fc 形状 (6144,·) 与源 (4096,·) 不匹配而**静默不加载**；
 `init_from.py` 增加 SwiGLU→MLP 显式转换（`w1→fc1`、`w3→fc2`，丢弃门控分支 `w2` 并注明）。
-结果：**copied 480/480 个 block 张量、shape_mismatches = 0**；heads 因 DualDPT/CameraDec 内部结构不同
-仍标注未映射（不强行塞）。论文规模（现 901.8 M 参数、可训练 20.2 M）用真 4RC 初始化在 3090 上
+结果：**copied 480/480 个 block 张量、shape_mismatches = 0**。
+
+相机头还能再进一步：4RC 的 `CameraDec(dim_in=3072)` 就是两层 `Linear+ReLU` 后接
+`fc_t(3)/fc_qvec(4)/fc_fov(Linear+ReLU → 2)`，拼接顺序与我们 `decode_camera_9d` 的
+`[t(3), quat(4), fov(2)]` **完全一致**；而 3072 恰好等于我们 `refined.fused` 的 `2·token_dim`。
+因此新增 `camera_layout: cam_dec`（默认 `mlp` 保持旧检查点可加载），逐层同构后
+**10/10 个相机头张量按名字直接搬运**（`fc_qvec.weight` 与源逐位相等），无需 rename 表。
+DualDPT 几何头内部结构不同，仍显式报告为未映射而不是硬塞。
+
+顺带补了一个防护：`load_checkpoint` 现在报告“检查点里有、模型里没有”的张量，
+避免改了头结构之后把训练好的头静默丢掉（这是这类 PEFT 框架最容易犯的错）。论文规模（现 901.8 M 参数、可训练 20.2 M）用真 4RC 初始化在 3090 上
 2 step 反传通过（5.7 s，紧凑 ckpt 0.4 MB）。
 
 一个中途判断被证据推翻并改正：我一度认为 `norm*.weight` 是 `1+γ` 偏移式（若干块均值≈0.0006）。

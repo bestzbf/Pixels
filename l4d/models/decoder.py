@@ -22,17 +22,23 @@ class FourDDecoder(nn.Module):
         camera_hidden: int = 512,
         camera_encoding_dim: int = 9,
         ray_space: str = "world",
+        camera_layout: str = "mlp",
     ):
         super().__init__()
         self.geometry_head = GeometryHead(token_dim, n_levels=n_levels, hidden=geometry_hidden, ray_space=ray_space)
-        self.camera_head = CameraHead(token_dim * 3, hidden=camera_hidden, encoding_dim=camera_encoding_dim)
+        # cam_dec layout consumes the concatenated frame++global tokens (2 * token_dim), like 4RC does.
+        camera_in = token_dim * 2 if camera_layout == "cam_dec" else token_dim * 3
+        self.camera_head = CameraHead(camera_in, hidden=camera_hidden, encoding_dim=camera_encoding_dim,
+                                      layout=camera_layout)
         self.ray_space = ray_space
 
     def forward(
         self, refined: RefinementOutput, output_size: Optional[tuple[int, int]] = None
     ) -> dict[str, torch.Tensor]:
         geometry = self.geometry_head(refined.levels, refined.grid, output_size)
-        camera_input = torch.cat([refined.camera_tokens, refined.fused.mean(dim=2)], dim=-1)
+        pooled = refined.fused.mean(dim=2)
+        camera_input = pooled if self.camera_head.layout == "cam_dec" else torch.cat(
+            [refined.camera_tokens, pooled], dim=-1)
         camera_encoding = self.camera_head(camera_input)
         rot_world_from_cam, origins, fov = decode_camera_9d(camera_encoding)
         fovy, fovx = fov[..., 0], fov[..., 1]
