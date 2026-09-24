@@ -52,7 +52,45 @@ Paper-scale model trains on this single card: `l4ar_paper.yaml` = **918.1 M para
 
 ScanNet is **not on this machine**: a whole-local-disk sweep for `*scannet*`, `scene[0-9][0-9][0-9][0-9]_*`,
 `*.sens` returns only this repository's own files (including `data/scannet/`, which is a synthetic
-ScanNet-*format* fixture). The NAS (`192.168.2.233:445`) is unreachable from this box and mounting needs root.
+ScanNet-*format* fixture). Where it is supposed to come from is now pinned down: `/etc/fstab` mounts two
+SMB shares from the NAS - `//192.168.2.233/e` and `//192.168.2.233/f` - at `~/16t/e` and `~/16t/f`
+(`16t` is *not* `/mnt/16t`, which is an unrelated empty root-owned directory). Neither is currently
+mounted, and they cannot be from this account:
+
+* no route to `192.168.2.0/24` - the box only has `172.25.10.23/24` (wire) and `172.25.36.240/22` (wifi)
+  with defaults via `172.25.x.1`, so the NAS is on a network this machine is not attached to right now;
+  `tcp/445` on 192.168.2.233 does not answer and `ping` is 100 % loss;
+* `credentials=/etc/cifs-credentials` is `-rw------- root root`, and `mount`/`mount -a` need root either way.
+
+So the unblocking step is the user's, not ours: reattach the machine to the NAS network (or plug in the
+16 TB volume), then `sudo mount -a` or `sudo mount //192.168.2.233/e ~/16t/e`. Everything after that is one
+command, and it has been run end-to-end here against a stand-in - see §3.1.
+
+### 3.1 The ScanNet chain, exercised on real data through the ScanNet loader
+
+`data/real_staging/` is a real-data tree in exactly ScanNet's dense layout (`frame-%06d.jpg`,
+`frame-%06d-depth.png` mm, `frame-%06d-pose.txt`, `intrinsic/intrinsic_depth.txt`), produced by
+`tools/prepare_colmap.py`. Pointing the ScanNet chain at it runs all five stages without touching any
+ScanNet-specific code:
+
+```bash
+DATA=configs/data/scannet.local.yaml POOL=data/scannet_local OUT=runs/scannet_chain \
+HEIGHT=128 WIDTH=128 STEPS=1000 MODEL=configs/model/l4ar_paper.yaml \
+bash scripts/train_on_scannet.sh data/real_staging 8
+```
+
+`[1/5]` inventories 6 scenes · `[2/5]` exports 6 clips with metric GT, 0 skipped · `[3/5]` caches 6/6
+latents through the frozen Wan VAE (`latents: 6/6 from cache`, 0 encoded on the fly) · `[4/5]` trains with
+480/800 block tensors + 10/10 `cam_dec` tensors transferred · `[5/5]` scores them. `scripts/train_on_scannet.sh`
+now takes `POOL`/`HEIGHT`/`WIDTH` and rewrites `root`/`manifest`/`latent_cache`/`resolution` in the generated
+config to match, because an export size and a training size that disagree silently resamples every clip.
+For real ScanNet the defaults (`data/scannet`, 192×256) reproduce the previous behaviour exactly.
+
+The two ingestion routes agree where it matters: `tools/check_dataset.py --data configs/data/scannet.local.yaml`
+reports the same depth coverages (colmap 100 %, courtyard 69.9 %, statue 70.9 %, pipes 31.5 %, office 25.7 %)
+and the same consecutive-view consistency (0.07-2.1 % of extent) as the manifest route above, and it
+independently re-flags `pancakes` as a duplicate of `colmap` (fingerprint distance 0.0045, same as colmap's
+own). So the ScanNet loader is not a second, separately-guessed reading of the data.
 
 Real pools used instead, after `tools/check_dataset.py` gating (consecutive-view NN / scene extent ≤5%, scale
 -normalised duplicate fingerprint, depth-scale scan):

@@ -18,18 +18,26 @@ MODEL=${MODEL:-configs/model/l4ar_paper.yaml}
 DEVICE=${DEVICE:-cuda}
 OUT=${OUT:-runs/scannet}
 STEPS=${STEPS:-2000}
+POOL=${POOL:-data/scannet}                   # where the exported clips/gt/manifest land
+HEIGHT=${HEIGHT:-192}                        # ScanNet's dense frames are 968x1296; 192x256 keeps the VAE happy
+WIDTH=${WIDTH:-256}
 
-mkdir -p data/scannet
+mkdir -p "$POOL"
 # Generate a local dataset config from the tracked template so the repository stays clean.
-$PY - "$ROOT" "$CLIPS" "$DATA" <<'PY'
+$PY - "$ROOT" "$CLIPS" "$DATA" "$POOL" "$HEIGHT" "$WIDTH" <<'PY'
 import os, re, sys
-root, clips, path = sys.argv[1], sys.argv[2], sys.argv[3]
+root, clips, path, pool, height, width = sys.argv[1:7]
 template = "configs/data/scannet.yaml"
 text = open(path, encoding="utf-8").read() if os.path.exists(path) else open(template, encoding="utf-8").read()
 text = re.sub(r"^scannet_root:.*$", f"scannet_root: {root}", text, flags=re.M)
 text = re.sub(r"^target_clips:.*$", f"target_clips: {clips}", text, flags=re.M)
+# the export size and the training size must agree, or the dataset silently resamples the clip
+text = re.sub(r"^root:.*$", f"root: {pool}", text, flags=re.M)
+text = re.sub(r"^manifest:.*$", f"manifest: {pool}/manifest.jsonl", text, flags=re.M)
+text = re.sub(r"^latent_cache:.*$", f"latent_cache: {pool}/latents", text, flags=re.M)
+text = re.sub(r"^resolution:.*$", f"resolution: [{height}, {width}]", text, flags=re.M)
 open(path, "w", encoding="utf-8").write(text)
-print(f"wrote {path}: scannet_root={root} target_clips={clips}")
+print(f"wrote {path}: scannet_root={root} target_clips={clips} pool={pool} resolution={height}x{width}")
 PY
 
 echo
@@ -38,8 +46,8 @@ $PY tools/prepare_scannet.py --root "$ROOT" --report-only | tail -20
 
 echo
 echo "[2/5] export clips (frames + metric GT npz + manifest.jsonl)"
-$PY tools/prepare_scannet.py --root "$ROOT" --out data/scannet --clip-length 21 --clip-stride 21 \
-  --height 192 --width 256 --clips "$CLIPS"
+$PY tools/prepare_scannet.py --root "$ROOT" --out "$POOL" --clip-length 21 --clip-stride 21 \
+  --height "$HEIGHT" --width "$WIDTH" --clips "$CLIPS"
 
 echo
 echo "[3/5] precompute frozen Wan-VAE latents (z^obs = mu(E_v(V)); the VAE stays frozen)"

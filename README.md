@@ -110,3 +110,10 @@ python tools/eval_generation.py --eval configs/eval/text4d200.yaml --checkpoint 
 `scripts/fix_gpu.sh`；ModelScope 通道拉到的真实冻结 Wan VAE（含官方 16 维 `latents_mean/std`，已写入配置）；
 `l4d/data/scannet.py` + `tools/prepare_scannet.py` 的 ScanNet 接入层；以及三阶段 GPU 训练实测
 （stage1 7.52→5.45、stage2 6.75→5.22、stage3 5.62→4.66）。
+
+所有**实测数字与结论以 [`RESULTS.md`](RESULTS.md) 为准**（含 4RC 权重逐张量校验、训练/对照配对评测、
+本地 Table 3 的负面结果）。ScanNet 尚未实跑的原因已定位：`/etc/fstab` 里 NAS 的
+`//192.168.2.233/{e,f}` 挂在 `~/16t/{e,f}`，当前既无到 `192.168.2.0/24` 的路由、
+`/etc/cifs-credentials` 也是 root 私有，需你重新接入该网络后 `sudo mount -a`；
+届时 `bash scripts/train_on_scannet.sh <scannet_root> 1143` 一条命令即可，该链路五步已在真实数据的
+ScanNet 同格式树（`data/real_staging`）上全程跑通，见 `RESULTS.md` §3.1。
