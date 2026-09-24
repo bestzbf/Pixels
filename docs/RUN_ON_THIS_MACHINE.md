@@ -45,9 +45,21 @@ qkv/proj/fc1/fc2 权重+偏置 + 两个 norm），`norm1.weight` 均值 1.274≠
 顺手修了 `ClipScorers`：transformers 5.0 的 `get_text_features()/get_image_features()` 返回
 `BaseModelOutputWithPooling` 而非张量，现由 `_features()` 统一取 `pooler_output`。
 
-## 3. ScanNet 数据：**本机没有**
+## 3. ScanNet 数据：**本机没有（穷尽式核查）**
 
-全盘核查（`find` 到 `scene0*`、`*.sens`、`*_00.aggregation.json`、`scannetv2` 等签名）结果：
+最后一轮把搜索扩到**整块本地盘**（`find / -xdev -maxdepth 7`，匹配 `*scannet*`、`scene[0-9][0-9][0-9][0-9]_*`、`*.sens`，
+排除 `/proc /sys /tmp` 与 site-packages），命中项**全部是本仓库自己的文件**：
+
+```
+configs/data/scannet.yaml  configs/data/scannet_probe.yaml  tools/prepare_scannet.py
+tests/test_scannet.py  l4d/data/scannet.py  data/scannet/  runs/gpu_scannet*/
+```
+
+注意 `data/scannet/` 是我用合成夹具生成的 ScanNet-**格式**数据（`tests/test_scannet.py build`），
+不是真 ScanNet，别混淆。另：ScanNet 是需签署 EULA 的门控数据集，不应从非官方镜像拉取——
+正确路径是你用自己的账号下载后告诉我目录。
+
+先前局部核查：
 
 - 只有上游仓库的 **split 列表**：`Desktop/MVS/stableMVS_mnh_zl/mvsanywhere/data_splits/ScanNetv2/{standard_split,dvmvs_split}`
 - 那些仓库的 config 指向 `/mnt/nas3/shared/datasets/scannet`、`/mnt/scannet-data-png2/` —— **是别的机器的路径，本机不存在**
