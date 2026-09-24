@@ -69,5 +69,4 @@ log "scoring on the same pool - DTU ships no clip-level split, so this is NOT he
 log "for a held-out number, hold back whole scans with MIN_SCANS and a second pool; do not read this as test-set accuracy"
 gpu $PY tools/eval_recon.py --model "$MODEL" --data "$DATA" --device cuda --checkpoint "$OUT/stage3_lora.pt" --out "$OUT/clouds"
 gpu $PY tools/eval_recon.py --model "$MODEL" --data "$DATA" --device cuda --from-scratch
-gpu $PY tools/eval_recon.py --model "$MODEL" --data "$DATA" --device cuda --from-scratch
 log "DTU_TRAINING_DONE"
