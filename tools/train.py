@@ -110,7 +110,8 @@ def run_stage(model: L4AR, stage: dict, data_cfg: dict, train_cfg: dict, device:
     vae = build_vae(train_cfg["model_cfg"]).to(device).eval()
     for param in vae.parameters():
         param.requires_grad_(False)
-    loader = build_dataloader({**data_cfg, "batch_size": stage.get("batch_size", data_cfg.get("batch_size", 2))})
+    batch_size = stage.get("batch_size") or data_cfg.get("batch_size", 1)
+    loader = build_dataloader({**data_cfg, "batch_size": batch_size})
     loss_fn = LatentTo4DLoss(LossConfig(**train_cfg.get("loss", {})))
     optimizer = torch.optim.AdamW(
         parameter_groups(model, float(stage.get("lr", 1e-4)), float(stage.get("lora_lr_scale", 1.0))),

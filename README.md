@@ -39,10 +39,12 @@ Pixels/
 │   ├── models/    alignment.py refinement.py lora.py heads.py decoder.py l4ar.py video_interface.py
 │   ├── losses/    objectives.py          # L = L_unc + L_cam + L_geom
 │   ├── data/      dataset.py             # ClipRecord/manifest/ReconstructionClips/LatentCache
+│   │              scannet.py             # ScanNet v2 两种布局 -> 世界系点图/射线/相机
+│   │              colmap.py              # COLMAP(cameras/images/points3D) -> ScanNet 同格式暂存树
 │   ├── eval/      projection_metrics.py gt_metrics.py residual_probe.py baselines.py protocol.py
 │   └── utils/     geometry.py config.py
-├── tools/         train.py infer.py eval_generation.py eval_gt.py residual_sensitivity.py
-│                  precompute_latents.py build_benchmark.py
+├── tools/         train.py infer.py eval_generation.py eval_gt.py eval_recon.py residual_sensitivity.py
+│                  precompute_latents.py build_benchmark.py prepare_scannet.py prepare_colmap.py
 ├── scripts/       install.sh smoke_test.sh train_all.sh eval_all.sh fetch_weights.sh
 └── tests/         test_reproduction.py   # 21 项结构/数学/协议一致性检查
 ```

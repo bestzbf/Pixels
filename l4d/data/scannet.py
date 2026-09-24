@@ -140,6 +140,7 @@ def export_manifest(
     size: tuple[int, int] = (192, 256),
     scenes: Optional[list[str]] = None,
     max_clips: int = 0,
+    dataset: str = "scannet",
 ) -> dict:
     """Write `manifest.jsonl`, per-clip frame directories and GT .npz files under `out_dir`."""
     os.makedirs(os.path.join(out_dir, "clips"), exist_ok=True)
@@ -151,10 +152,16 @@ def export_manifest(
         if loaded is None:
             skipped.append(scene)
             continue
-        for start in range(0, len(loaded.colors) - clip_length + 1, clip_stride):
+        # A scene shorter than the requested clip still contributes, at its own 4k+1 prefix length.
+        available = 1 + 4 * ((min(len(loaded.colors), clip_length) - 1) // 4)
+        if available < 5:
+            skipped.append(f"{scene}:only {len(loaded.colors)} frames")
+            continue
+        clip_stride = min(clip_stride, available)
+        for start in range(0, len(loaded.colors) - available + 1, clip_stride):
             step = max(frame_stride, 1)
-            positions = list(range(start, start + clip_length * step, step))[:clip_length]
-            if len(positions) < clip_length:
+            positions = list(range(start, start + available * step, step))[:available]
+            if len(positions) < available:
                 break
             clip_id = f"{scene}_{start:06d}"
             clip_dir = os.path.join(out_dir, "clips", clip_id)
@@ -169,10 +176,10 @@ def export_manifest(
             records.append(
                 {
                     "clip_id": clip_id,
-                    "dataset": "scannet",
+                    "dataset": dataset,
                     "video": clip_dir,
                     "gt": gt_path,
-                    "num_frames": clip_length,
+                    "num_frames": available,
                     "resolution": list(size),
                     "split": "train",
                 }

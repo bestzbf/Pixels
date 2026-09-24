@@ -61,6 +61,9 @@ class LossConfig:
     normal_weight: float = 1.0
     tail_quantile: float = 0.9
     quantiles: tuple[float, float] = (0.2, 0.8)
+    # Absolute metric point error makes a 40 m room and a 160 m courtyard incomparable inside one
+    # batch, so the geometry term is divided by the GT scene scale (relative error).
+    normalise_point_error: bool = True
 
 
 class LatentTo4DLoss(torch.nn.Module):
@@ -96,8 +99,12 @@ class LatentTo4DLoss(torch.nn.Module):
         err = (aligned - points_gt).norm(dim=-1)
         mask = valid_points
         denom = mask.sum().clamp(min=1.0)
-        mean_err = (err * mask).sum() / denom
-        tail = tail_error(err, mask, c.tail_quantile)
+        scale = 1.0
+        if c.normalise_point_error:
+            extent = (points_gt * mask.unsqueeze(-1)).abs().amax(dim=(-3, -2, -1), keepdim=True)
+            scale = extent.clamp(min=1e-3).mean().clamp(min=1e-3)
+        mean_err = (err * mask).sum() / denom / scale
+        tail = tail_error(err, mask, c.tail_quantile) / scale
         normal_pred = surface_normals(aligned, mask)
         normal_gt = surface_normals(points_gt, mask)
         normal_err = (1.0 - (normal_pred * normal_gt).sum(-1).clamp(-1, 1)) * mask

@@ -19,8 +19,18 @@ SEVEN_SCENES = GTBenchmark("7scenes", sequences=18)
 NRGBD = GTBenchmark("nrgbd", sequences=9)
 
 
+def _subsample(cloud: torch.Tensor, max_points: int, seed: int = 0) -> torch.Tensor:
+    """Chamfer on 1e5-point clouds is quadratic; a fixed seeded subsample is the standard estimate."""
+    if max_points <= 0 or cloud.shape[0] <= max_points:
+        return cloud
+    generator = torch.Generator().manual_seed(seed)
+    pick = torch.randperm(cloud.shape[0], generator=generator)[:max_points]
+    return cloud[pick]
+
+
 def _nn_distances(query: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
     """Chunked nearest-neighbour distance from every query point to the reference cloud."""
+    query, reference = _subsample(query, 20000), _subsample(reference, 20000)
     chunk = max(1, int(4e6 / max(reference.shape[0], 1)))
     out = []
     for start in range(0, query.shape[0], chunk):

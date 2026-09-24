@@ -1,0 +1,20 @@
+# Local COLMAP scenes (ETH3D dslr reconstructions) as the interim training pool, until ScanNet arrives.
+# Build it with:
+#   python tools/prepare_colmap.py --root "/home/zbf/Desktop/mvs示例数据/准确版_多视角输入" \
+#          --out data/colmap --staging data/colmap_staging --height 128 --width 160 --frames 21
+manifest: data/colmap/manifest.jsonl
+root: data/colmap
+latent_cache: data/colmap/latents
+datasets: [colmap_eth3d]
+split: train
+frames: 21                     # rounded down per scene to 4k+1 (Wan temporal compression 4)
+resolution: [128, 160]            # matches the export; GT in the npz is authoritative
+batch_size: 1
+vae_backend: wan               # frozen Wan2.1 VAE at /mnt/data/pixels-weights/wan-vae
+
+notes: >
+  Depth supervision is the scene's own points3D cloud reprojected per view, so it is sparse but real;
+  every Eq. 7 term is masked to observed pixels. Poses and intrinsics come from the COLMAP model, with
+  THIN_PRISM_FISHEYE distortion removed at the clip resolution using the same ideal K that the point
+  projection uses, so image/intrinsic/depth stay mutually consistent. This pool is a stand-in for
+  ScanNet: same interface, weaker supervision, and it is NOT one of the paper's six training datasets.

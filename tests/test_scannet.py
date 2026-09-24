@@ -91,11 +91,14 @@ def test_export_manifest_produces_loadable_clips():
     records = load_manifest(summary["manifest"])
     report = manifest_report(records)
     assert report["clips"] == summary["clips"]
-    dataset = ReconstructionClips(records, image_size=(HEIGHT, WIDTH), frames=10)
+    # exports are 4k+1 frames long (Wan temporal compression), so the record governs the clip length
+    frames = records[0].num_frames
+    dataset = ReconstructionClips(records, image_size=(HEIGHT, WIDTH), frames=frames)
     sample = collate_clips([dataset[0]])
-    assert sample["video"].shape == (1, 3, 10, HEIGHT, WIDTH)
+    assert frames == 1 + 4 * ((10 - 1) // 4), frames
+    assert sample["video"].shape == (1, 3, frames, HEIGHT, WIDTH)
     assert float(sample["video"].min()) >= -1.001 and float(sample["video"].max()) <= 1.001  # VAE range
-    assert sample["gt_points"].shape == (1, 10, HEIGHT, WIDTH, 3)
+    assert sample["gt_points"].shape == (1, frames, HEIGHT, WIDTH, 3)
     assert torch.isfinite(sample["gt_points"]).all()
 
 

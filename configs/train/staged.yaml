@@ -11,7 +11,7 @@ stages:
     activate: [alignment]                     # trainable: A_phi only
     data: configs/data/clips_final.yaml
     steps: 20000                              # verify
-    batch_size: 2                             # verify
+    batch_size: null                            # null -> the dataset config decides (clips may differ in length)
     gradient_accumulation: 4                  # verify
     lr: 1.0e-4                                # verify
     lr_scheduler: cosine
@@ -25,7 +25,7 @@ stages:
     activate: [alignment, decoder_heads]
     data: configs/data/clips_final.yaml
     steps: 20000                              # verify
-    batch_size: 2
+    batch_size: null
     lr: 1.0e-4
     lr_scheduler: cosine
     weight_decay: 0.01
@@ -37,7 +37,7 @@ stages:
     data: configs/data/clips_final.yaml
     clips: 1143                               # paper: final stage clip count
     steps: 40000                              # verify
-    batch_size: 2
+    batch_size: null
     lr: 2.0e-5                                # verify (lower for adapter updates)
     lora_lr_scale: 5.0                        # verify
     lr_scheduler: cosine

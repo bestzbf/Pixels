@@ -87,7 +87,8 @@ class ReconstructionClips(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
-    def _load_video(self, record: ClipRecord) -> torch.Tensor:
+    def _load_video(self, record: ClipRecord, size: tuple[int, int], frames: int | None = None) -> torch.Tensor:
+        """Frames sampled to `size` (H,W); the GT annotation defines the canonical resolution."""
         from PIL import Image
 
         paths = sorted(
@@ -95,13 +96,13 @@ class ReconstructionClips(Dataset):
             for name in os.listdir(record.video)
             if name.lower().endswith((".png", ".jpg", ".jpeg"))
         )
-        index = np.linspace(0, len(paths) - 1, self.frames).round().astype(int)
-        frames = []
+        index = np.linspace(0, len(paths) - 1, frames or self.frames).round().astype(int)
+        collected = []
         for position in index:
-            image = Image.open(paths[position]).convert("RGB").resize((self.image_size[1], self.image_size[0]))
+            image = Image.open(paths[position]).convert("RGB").resize((size[1], size[0]))
             array = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0)
-            frames.append(array.permute(2, 0, 1))
-        video = torch.stack(frames, dim=1)  # (3,T,H,W)
+            collected.append(array.permute(2, 0, 1))
+        video = torch.stack(collected, dim=1)  # (3,T,H,W)
         return video * 2.0 - 1.0  # the video VAEs are trained on [-1,1]
 
     def __getitem__(self, index: int) -> dict[str, Any]:
@@ -109,11 +110,13 @@ class ReconstructionClips(Dataset):
         payload = np.load(record.gt)
         gt_points = torch.from_numpy(np.asarray(payload["points"], dtype=np.float32))
         gt_depth = torch.from_numpy(np.asarray(payload["depth"], dtype=np.float32))
+        size = self.image_size if gt_depth.dim() < 3 else (int(gt_depth.shape[-2]), int(gt_depth.shape[-1]))
+        frames = min(self.frames, int(gt_depth.shape[0])) if gt_depth.dim() >= 3 else self.frames
         mask = torch.from_numpy(np.asarray(payload.get("mask", np.ones(gt_depth.shape, dtype=bool))))
         return {
             "clip_id": record.clip_id,
             "dataset": record.dataset,
-            "video": self._load_video(record),
+            "video": self._load_video(record, size, frames),
             "gt_points": gt_points.permute(1, 0, 4, 2, 3) if gt_points.dim() == 5 else gt_points,
             "gt_depth": gt_depth,
             "depth_mask": mask,
