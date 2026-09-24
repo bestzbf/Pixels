@@ -55,6 +55,10 @@ def _world_to_camera(pose_camera_to_world: np.ndarray) -> tuple[np.ndarray, np.n
 
 def _write_depth(source: str, destination: str, divisor: float) -> int:
     """Store the depth map as uint16 millimetres, dropping sentinel pixels."""
+    if source.endswith(".pfm"):
+        millimetres = np.rint(read_pfm(source) * (1000.0 / divisor)).astype(np.uint16)
+        cv2.imwrite(destination, millimetres)
+        return int((millimetres > 0).sum())
     raw = cv2.imread(source, cv2.IMREAD_UNCHANGED)
     if raw is None:
         return 0
@@ -118,13 +122,78 @@ def read_split(root: str) -> dict[str, str]:
     return split
 
 
+def scan_dtu(root: str) -> list[dict]:
+    """mvsnet-preprocessed DTU: <scan>/{cams,images,gt_depths}/%08d.(txt|png|pfm) + scan.ply.
+
+    Depth is a single-band float PFM already in millimetres (median 648 mm for the DTU turntable, which is
+    the camera-to-object distance), so `--depth-divisor 1000` writes it through unchanged as uint16 mm.
+    """
+    entries = []
+    for dirpath, dirnames, _ in os.walk(root):
+        if "cams" not in dirnames:
+            continue
+        scan = os.path.basename(dirpath.rstrip("/"))
+        cams = os.path.join(dirpath, "cams")
+        for name in sorted(os.listdir(cams)):
+            if not name.endswith("_cam.txt"):
+                continue
+            stem = name[: -len("_cam.txt")]
+            image = os.path.join(dirpath, "images", f"{stem}.png")
+            depth = os.path.join(dirpath, "gt_depths", f"{stem}.pfm")
+            if os.path.exists(image) and os.path.exists(depth):
+                entries.append({"scene": scan, "name": stem, "rgb": image,
+                                "pose": os.path.join(cams, name), "depth": depth})
+    return entries
+
+
+def read_dtu_camera(path: str) -> tuple[np.ndarray, tuple]:
+    """Parse one mvsnet `cam.txt`: 4x4 world->camera extrinsic, 3x3 intrinsic, then near/far."""
+    lines = [line.strip() for line in open(path, encoding="utf-8") if line.strip()]
+    blocks: dict[str, list[str]] = {}
+    key = None
+    for line in lines:
+        if line in ("extrinsic", "intrinsic"):
+            key = line
+            blocks[key] = []
+        elif key == "extrinsic" and len(blocks[key]) < 4:
+            blocks[key].append(line)
+        elif key == "intrinsic" and len(blocks[key]) < 3:
+            blocks[key].append(line)
+        elif key == "intrinsic" and len(blocks[key]) == 3:
+            blocks["range"] = line.split()
+    extrinsic = np.array([[float(v) for v in row.split()] + ([0.0] if len(row.split()) == 3 else [])
+                          for row in blocks["extrinsic"]], dtype=np.float64)
+    if extrinsic.shape == (3, 4):
+        extrinsic = np.vstack([extrinsic, [0, 0, 0, 1]])
+    intrinsic = np.array([[float(v) for v in row.split()] for row in blocks["intrinsic"]], dtype=np.float64)
+    return np.linalg.inv(extrinsic), (float(intrinsic[0, 0]), float(intrinsic[1, 1]),
+                                      float(intrinsic[0, 2]), float(intrinsic[1, 2]))
+
+
+def read_pfm(path: str) -> np.ndarray:
+    """Single- or three-band float pixmap; a negative scale means the rows are stored mirrored."""
+    raw = open(path, "rb").read()
+    header, pos = [], 0
+    for _ in range(3):
+        index = raw.index(b"\n", pos)
+        header.append(raw[pos:index].decode("ascii"))
+        pos = index + 1
+    width, height = (int(value) for value in header[1].split())
+    scale = float(header[2])
+    values = np.frombuffer(raw[pos:], dtype="<f4")
+    bands = values.size // (width * height)
+    grid = values.reshape(height, width * bands)[:, :width] if bands > 1 else values.reshape(height, width)
+    return grid[:, ::-1] if scale < 0 else grid
+
+
 def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dict:
-    entries = scan_flat(root)
-    dialect = "flat"
+    entries, dialect = scan_dtu(root), "dtu"
+    if not entries:
+        entries, dialect = scan_flat(root), "flat"
     if not entries:
         entries, dialect = scan_shotton(root), "shotton"
     if not entries:
-        raise SystemExit(f"no 7-Scenes/NRGBD frames recognised under {root}")
+        raise SystemExit(f"no DTU / 7-Scenes / NRGBD frames recognised under {root}")
     calibration = SHOTTON_INTRINSICS
     intrinsic_file = next((os.path.join(dirpath, "camera-intrinsics.txt")
                            for dirpath, _, files in os.walk(root) if "camera-intrinsics.txt" in files), None)
@@ -149,12 +218,24 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
         depth_dir = os.path.join(out, scene, "depths")
         for folder in (model_dir, image_dir, depth_dir):
             os.makedirs(folder, exist_ok=True)
+        if dialect == "dtu":
+            # DTU ships one intrinsic per view file; they are identical within a scan, so read the first
+            probe = cv2.imread(frames[0]["rgb"], cv2.IMREAD_COLOR)
+            height, width = probe.shape[:2]
+            _, (fx, fy, cx, cy) = read_dtu_camera(frames[0]["pose"])
+        elif not intrinsic_file:
+            # only the fallback constant is left, and it belongs to the 640x480 Shotton frames
+            height, width, fx, fy, cx, cy = SHOTTON_INTRINSICS
         lines = ["# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME"]
         usable = 0
         for index, frame in enumerate(sorted(frames, key=lambda item: item["name"]), start=1):
-            pose = np.loadtxt(frame["pose"])
-            if pose.size != 16:
-                continue
+            if dialect == "dtu":
+                pose, _ = read_dtu_camera(frame["pose"])
+            else:
+                values = np.loadtxt(frame["pose"])
+                if values.size != 16:
+                    continue
+                pose = values.reshape(4, 4)
             stamp = f"{index - 1:06d}"
             colour = cv2.imread(frame["rgb"], cv2.IMREAD_COLOR)
             if colour is None or not _write_depth(frame["depth"], os.path.join(depth_dir, f"frame-{stamp}.png"), divisor):
