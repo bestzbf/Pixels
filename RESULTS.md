@@ -274,6 +274,28 @@ aspect, since 640×480 does not fit this card at 918 M parameters) and the queue
 (`runs/seven`, then `tools/eval_gt.py --benchmark 7scenes`) reports Acc/Comp in **cm** and NC next to the
 paper's reference row, which is the first comparison here in the paper's own units.
 
+### 5.2 How the next training corpus was chosen (and what was deliberately not downloaded)
+
+The paper names no dataset list in v1 (no appendix), so "most reasonable" has to be argued from what L4AR
+consumes: **RGB-D video clips with metric depth and camera poses**, and - since it is a 4D method - ideally
+**dynamic content**, which is the one axis where everything on this machine is weakest: 7-Scenes, NRGBD,
+ETH3D and the photogrammetry capture are all static scenes observed by a moving camera (this gap is written
+into `configs/data/scannet.yaml`'s own notes).
+
+| candidate | verdict |
+|---|---|
+| ScanNet / ScanNet++ re-hosted on the mirror (`fjd/scannet_sample`, `pmodi/scannet1`, `GaussianWorld/scannetpp_*`) | **not downloaded.** Both are EULA-gated at the source; pulling them from an unofficial mirror would be an unlicensed copy of data the paper's own benchmark depends on, and would put a number derived from it into a repository that gets pushed. The gate is the point of the agreement. |
+| `Pointcept/arkitscenes-compressed` (66.8 GB) and the other ARKitScenes mirrors | **rejected on content.** Every re-hosting is downstream of a *point-cloud* library (Pointcept / SpatialLM / 3DGS / detection), none ships a README describing RGB-D video, and ARKitScenes' real video is ~100 TB so it is not plausibly re-hosted here. Nine hours of bandwidth to probably get meshes we cannot clip. |
+| Hypersim (71 GB on the mirror) | **held in reserve.** Format match is ideal (per-view RGB, exact depth, per-view camera JSON) and it is openly licensed, but the imagery is synthetic. If real dynamic data runs out, a few scenes can be fetched per-scene from the official S3. |
+| KITTI odometry (public URLs, host reachable) | **fallback.** Real video + LiDAR depth + poses + genuinely dynamic traffic; but 34-beam depth is ~5 % coverage and the 1242×375 frame is a hard aspect fit for a 256×192 latent grid. |
+| **DyCheck** (`JiaHWang/dycheck_eval`, 3.8 GB) | **chosen.** Real captured scenes with per-frame ground-truth point maps and sampled cameras - i.e. actual 4D supervision rather than camera-motion-par-for-static - and at 3.8 GB it is verifiable in ~30 minutes instead of being a nine-hour gamble. Queued behind the benchmark downloads rather than competing for the same 2.3 MB/s. |
+
+Sequelling matters here: `huggingface.co` and the Cornell 7-Scenes mirror do not answer from this box at all,
+while hf-mirror.com (~2.3 MB/s) and cvlibs.net do - GitHub and `raw.githubusercontent.com` work too (the
+loader files I looked for there simply were not at the paths I guessed), but they carry no re-hosting of these
+datasets. Everything queued therefore runs through `scripts/fetch_benchmarks.sh`-style resumable, retrying
+pulls, one at a time, because 2.3 MB/s is the whole budget and three concurrent pulls would triple every ETA.
+
 ## 6. Generation metrics (Table 1 pipeline)
 
 With the local DINOv2-base and CLIP-ViT-L/14 as real encoders, two off-axis views per case
