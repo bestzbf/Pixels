@@ -84,10 +84,13 @@ def main() -> None:
         scores = accuracy_completeness(
             aligned[selected].float(), ground_truth[selected].float(), threshold=max(0.02 * extent, 0.05)
         )
+        overlap = float((error[selected] < max(0.02 * extent, 0.05)).float().mean())
         rows.append({
             "clip": record.clip_id, "frames": frames, "scene_extent_m": round(extent, 1),
             "mean_rel_err": round(float(error[selected].mean() / max(extent, 1e-6)), 4),
-            "acc_m": round(scores["accuracy"], 3), "comp_m": round(scores["completeness"], 3),
+            "inlier_fraction": round(overlap, 4),
+            "acc_m": None if not np.isfinite(scores["accuracy"]) else round(scores["accuracy"], 3),
+            "comp_m": None if not np.isfinite(scores["completeness"]) else round(scores["completeness"], 3),
         })
         if index == args.index and args.out:
             os.makedirs(args.out, exist_ok=True)
@@ -95,9 +98,11 @@ def main() -> None:
             write_ply(os.path.join(args.out, "pred.ply"), aligned[selected].numpy().astype("float32"))
             print(f"wrote {args.out}/gt.ply and pred.ply ({int(selected.sum())} points)")
     for row in rows:
+        fmt = lambda value: "   --  " if value is None else f"{value:6.3f}"
         print(f"{row['clip']:26s} T={row['frames']:2d} extent={row['scene_extent_m']:6.1f}m "
-              f"rel_err={row['mean_rel_err']:.4f} acc={row['acc_m']:5.3f}m comp={row['comp_m']:5.3f}m")
-    usable = [row for row in rows if np.isfinite(row["acc_m"])]
+              f"rel_err={row['mean_rel_err']:.4f} inliers={row['inlier_fraction']*100:5.1f}% "
+              f"acc={fmt(row['acc_m'])}m comp={fmt(row['comp_m'])}m")
+    usable = [row for row in rows if row["acc_m"] is not None]
     if usable:
         print(f"mean relative point error over {len(usable)} clips: "
               f"{sum(row['mean_rel_err'] for row in usable) / len(usable):.4f} of scene extent")

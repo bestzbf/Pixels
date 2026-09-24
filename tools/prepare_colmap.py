@@ -45,6 +45,7 @@ def main() -> None:
     parser.add_argument("--clip-stride", type=int, default=0, help="window stride between clips (0 = non-overlapping)")
     parser.add_argument("--dataset", default="colmap", help="dataset tag written into the manifest")
     parser.add_argument("--export-all", action="store_true", help="export every scene in --staging, not just this run's")
+    parser.add_argument("--scenes", nargs="*", default=None, help="explicit staged scene names, e.g. after tools/check_dataset.py")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
 
@@ -72,7 +73,12 @@ def main() -> None:
     if not staging_scenes:
         raise SystemExit("nothing staged; check --root and whether images resolve against cameras.txt names")
 
-    scenes = discover_scenes(args.staging) if args.export_all else staging_scenes
+    if args.scenes:
+        scenes = args.scenes
+    elif args.export_all:
+        scenes = discover_scenes(args.staging)
+    else:
+        scenes = staging_scenes
     summary = export_manifest(
         args.staging,
         args.out,

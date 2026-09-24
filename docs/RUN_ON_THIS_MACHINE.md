@@ -105,15 +105,31 @@ COLMAP 文本模型转成 ScanNet 同格式暂存树，再交给已测试的 `ex
 即：**真实数据上确实学到了东西，但幅度小**（相对点误差 -8%，稠密化 20–30%）。原因是可解释的：
 无 4RC 预训练初始化（随机层级）+ 只有 4 个 clip + 稀疏 `points3D` 监督（覆盖率 23–67%）。
 
-### 更好的真实监督：本机另外 2 个稠密深度场景
+### 更好的真实监督 + 数据 QC 闸门
 
 `BioPhysGS-paper/benchmark_artifacts/converted/{colmap,pancakes}`：32 视角、**逐视图稠密深度 PNG（毫米）**、
-`PINHOLE 256×256, f=221.70`。接入层因此新增：优先使用盘上深度图（`_find_depth`/`_depth_to_millimetres`，
-支持 uint16 毫米与 float 米两种约定）、深度 NEAREST 重采样、以及 NeRF 风格改名场景的
-**按位序回退匹配**（poses 说 `frame_000.png` 而盘上是 `000_color.png`）。稠密场景覆盖率实测 **100%**。
+`PINHOLE 256×256, f=221.70`。接入层因此新增：优先用盘上深度图（`_find_depth`/`_depth_to_millimetres`，支持
+uint16 毫米与 float 米两种约定）、深度 NEAREST 重采样、NeRF 风格改名场景的**按位序回退匹配**
+（poses 写 `frame_000.png` 而盘上是 `000_color.png`）。稠密场景覆盖率实测 **100%**。
 
-合并真实池 = 4 个 ETH3D（稀疏）+ 2 个稠密物体场景 = 6 clips，`configs/data/real.yaml`；
-DINOv2 初始化 + 该池的 2000 step×3 训练与对照评测已排队执行。
+`tools/check_dataset.py` 把“能不能用这块数据”变成可复现判据：
+- **相邻视图**（而非任意视图对）世界点最近邻距离 / 场景尺度 ≤ 5%；
+- 尺度归一化的几何指纹 → 找重复资产；
+- `--ascent` 扫描深度尺度，检查深度与位姿是否同一单位系。
+
+第一版工具用任意视图对时把稠密场景误判成 24–56% 不一致；改成相邻视图后实测：
+
+| clip | 深度覆盖 | 相邻视图一致性 | 最优深度尺度 | 判定 |
+|---|---|---|---|---|
+| colmap（稠密物体场景） | 100% | **0.45%** | 1.0 | keep |
+| pancakes | 100% | 0.45% | 1.0 | **drop：与 colmap 同一资产（指纹相同）** |
+| statue / courtyard / office / pipes | 26–71% | 0.07–2.1% | 1.0 | keep |
+
+即：**深度图与位姿尺度是自洽的**（先前“不一致”是拿轨道上互不重叠的两视图比较造成的假象），
+只有重复拷贝被剔除。最终真实池 = **5 个唯一 clip**（1 稠密 + 4 ETH3D），`configs/data/real.yaml`。
+
+未训练基线（768d/12bl，DINOv2 尺寸）在该池上：`colmap rel=0.3327 / courtyard 0.0668 / office 0.0244 /
+pipes 0.0399 / statue 0.0488`，4 个可算 clip 的均值 **0.0450**。
 
 `tools/eval_recon.py` 在真实 clip 上给出相对点误差 / Acc / Comp 与 PLY 导出。实测：
 **随机初始化基线 0.0446 vs 训练 300 step×3 阶段 0.0444**（几乎无差），但 3/4 场景 completeness 变好
