@@ -29,6 +29,12 @@
 
 缺 4RC 的后果已如实处理：`tools/train.py` 现在**警告后继续随机初始化**（结构与训练动力学有效，绝对数值不可与论文对比）。
 
+**可用的替代初始化**：`l4d/models/init_from.py` 把真实预训练 ViT 灌进冻结精化层级（4RC 本身就建立在
+DINOv2 之上）。用本机 `dinov2-base/model.safetensors` 实测 **144/144 个 block 参数命中**（12 block ×
+qkv/proj/fc1/fc2 权重+偏置 + 两个 norm），`norm1.weight` 均值 1.274≠1 证明确实来自预训练而非随机；
+配置见 `configs/model/l4ar_dinov2.yaml`（token_dim 768 / heads 12 / depth 12）。它同时反推出 4RC 到位后
+该用的真实维度。
+
 **顺带修正的论文配置**：VAE 的归一化常数原先标 `verify`，现已从 checkpoint 的 `vae/config.json` 取真值写入
 `configs/model/l4ar_paper.yaml`（16 维 `latents_mean` / `latents_std`），`SharedLatentInterface.normalize()` 改为逐通道
 `(z-mean)/std`。

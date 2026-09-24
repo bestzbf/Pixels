@@ -1,0 +1,18 @@
+# DINOv2-sized variant: the refinement hierarchy matches a real pretrained ViT-B/14 (768d, 12 blocks),
+# so `pretrained_init.vit` can fill it instead of leaving it random. Use this when 4RC is unavailable.
+_base_: l4ar_paper.yaml
+
+model:
+  token_dim: 768
+  heads: 12
+  depth: 12
+  tap_after: [2, 5, 8, 11]
+  lora_rank: 16
+  geometry_hidden: 192
+  camera_hidden: 384
+
+pretrained_init:
+  source: dinov2                # 4RC if its weights are reachable, otherwise this
+  checkpoint: null              # /mnt/data/pixels-weights/4rc/model.safetensors when available
+  vit: /mnt/data/pixels-weights/dinov2-base
+  strict: false

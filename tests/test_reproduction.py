@@ -294,3 +294,26 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# --- Pretrained initialisation ------------------------------------------------
+def test_vit_init_fills_the_refinement_blocks(tmp_path=None):
+    """With a real local DINOv2 the frozen hierarchy must stop being random; skip if absent."""
+    import glob
+
+    from l4d.models.init_from import load_vit_into_refinement
+
+    candidates = glob.glob("/mnt/data/pixels-weights/dinov2-base/model.safetensors")
+    if not candidates:
+        print("skip  vit init test (no local DINOv2 checkpoint)")
+        return
+    net = build_l4ar(L4ARConfig(**{**TINY, "token_dim": 768, "heads": 12, "depth": 12}))
+    before = net.refinement.blocks[0].norm1.weight.detach().clone()
+    report = load_vit_into_refinement(net.refinement, candidates[0], max_blocks=12)
+    assert report["copied"] == 12 * 12, report          # qkv/proj/fc1/fc2 x2 + 2 norms per block
+    assert report["shape_mismatches"] == [], report["shape_mismatches"]
+    assert not torch.allclose(before, net.refinement.blocks[0].norm1.weight.detach())
+    for name in ("blocks.0.attn.qkv.weight", "blocks.11.mlp.fc2.bias", "blocks.5.norm2.weight"):
+        assert name in dict(net.refinement.named_parameters())
+    assert torch.allclose(net.refinement.blocks[0].attn.qkv.base.weight.sum().float(),
+                          net.refinement.blocks[0].attn.qkv.base.weight.detach().float().sum())

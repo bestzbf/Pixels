@@ -179,6 +179,19 @@ def main() -> None:
         from l4d.models.l4ar import load_4rc_init
 
         print("4RC init:", json.dumps(load_4rc_init(model, checkpoint, bool(init.get("strict", False)))), flush=True)
+    elif init.get("vit"):
+        from l4d.models.init_from import load_vit_into_refinement
+
+        report = load_vit_into_refinement(model.refinement, init["vit"], max_blocks=model.cfg.depth)
+        print(
+            f"pretrained ViT init from {init['vit']}: copied {report['copied']}/{report['block_params']} "
+            f"block params from {report['source_blocks']} source blocks",
+            flush=True,
+        )
+        if report["shape_mismatches"]:
+            print("  shape mismatches (first 6):", json.dumps(report["shape_mismatches"]), flush=True)
+        if not report["copied"]:
+            print("  nothing copied - check token_dim/heads against the checkpoint", flush=True)
     stages = train_cfg["stages"]
     if args.stage:
         stages = [stage for stage in stages if stage["name"] == args.stage]
