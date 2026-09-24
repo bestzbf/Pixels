@@ -42,8 +42,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from l4d.data.metashape import _rotmat2qvec
 
-FLAT = re.compile(r"^(frame-\d{6})\.color\.(png|jpg)$")
-SHOTTON = re.compile(r"^(scene-\d{4}-\d{6})-rgb\.png$")
+FLAT = re.compile(r"^(frame-\d{4,6})\.color\.(png|jpe?g)$")
+SHOTTON = re.compile(r"^(scene-\d{4}-\d{6})-rgb\.(png|jpg)$")
 SENTINEL = 60000  # uint16 saturation: these pixels carry no measurement
 SHOTTON_INTRINSICS = (640, 480, 585.0, 585.0, 320.5, 240.5)
 
