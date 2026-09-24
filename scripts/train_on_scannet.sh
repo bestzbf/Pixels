@@ -12,22 +12,23 @@ cd "$(dirname "$0")/.."
 ROOT=${1:?usage: train_on_scannet.sh <scannet-root> [clips]}
 CLIPS=${2:-1143}
 PY=${PY:-/home/zbf/Desktop/dl_env/bin/python}     # torch build that actually sees the GPU here
-DATA=${DATA:-configs/data/scannet.yaml}
+DATA=${DATA:-configs/data/scannet.local.yaml}   # generated from the tracked template, never edited in place
 MODEL=${MODEL:-configs/model/l4ar_paper.yaml}
 DEVICE=${DEVICE:-cuda}
 OUT=${OUT:-runs/scannet}
 STEPS=${STEPS:-2000}
 
 mkdir -p data/scannet
-# point the dataset config at whatever root was given, without hand-editing YAML
+# Generate a local dataset config from the tracked template so the repository stays clean.
 $PY - "$ROOT" "$CLIPS" "$DATA" <<'PY'
-import re, sys
+import os, re, sys
 root, clips, path = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(path, encoding="utf-8").read()
+template = "configs/data/scannet.yaml"
+text = open(path, encoding="utf-8").read() if os.path.exists(path) else open(template, encoding="utf-8").read()
 text = re.sub(r"^scannet_root:.*$", f"scannet_root: {root}", text, flags=re.M)
 text = re.sub(r"^target_clips:.*$", f"target_clips: {clips}", text, flags=re.M)
 open(path, "w", encoding="utf-8").write(text)
-print(f"{path}: scannet_root={root} target_clips={clips}")
+print(f"wrote {path}: scannet_root={root} target_clips={clips}")
 PY
 
 echo

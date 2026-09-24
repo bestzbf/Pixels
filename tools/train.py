@@ -185,8 +185,17 @@ def main() -> None:
     elif checkpoint:
         from l4d.models.l4ar import load_4rc_init
 
-        train_cfg["init_source"] = "4RC"
-        print("4RC init:", json.dumps(load_4rc_init(model, checkpoint, bool(init.get("strict", False)))), flush=True)
+        try:
+            report = load_4rc_init(model, checkpoint, bool(init.get("strict", False)))
+            train_cfg["init_source"] = "4RC"
+            print("4RC init:", json.dumps(report), flush=True)
+        except Exception as error:  # noqa: BLE001 - a half-fetched checkpoint must not kill a run
+            print(
+                f"WARNING: 4RC checkpoint unusable ({type(error).__name__}: {str(error)[:120]}) - if a download "
+                "is still running, wait for scripts/fetch_4rc_mirror.sh to print DONE before relying on this init; "
+                "continuing with random initialisation.",
+                flush=True,
+            )
     elif init.get("vit"):
         from l4d.models.init_from import load_vit_into_refinement
 

@@ -161,6 +161,22 @@ courtyard 内点率 60×）。这同时验证了论文“用预训练 4D 层级�
 （office 1.257→1.000 m、pipes 0.639→0.503 m）。结论要直说：**没有 4RC 预训练初始化、只有 4 个 clip 时，
 300 step 还不足以让几何学出来**——管线与梯度是通的，学习量不够；正在跑 2000 step×3 阶段复验。
 
+### ScanNet 一键链已验证（用 ScanNet 格式夹具当数据）
+
+`scripts/train_on_scannet.sh <scannet-root> [clips]`：清单盘点 → 导出 clip+度量 GT → 冻结 Wan VAE 预编码
+→ 三阶段训练 → 与未训练基线对照评测。本机以 2 场景 × 63 帧的 ScanNet 格式夹具在 **GPU + 真实 VAE** 上实测：
+
+```
+[1/5] {"scenes": 2, "scene0000_00": 63, "scene0001_00": 63}
+[2/5] {"clips": 6, "meets_target": false}
+[3/5] frozen Wan-VAE latents  (cuda)
+[4/5] stage1 -> stage2 loss 5.14 -> stage3 loss 4.19 (trainable-only ckpt 4.7 / 11 MB)
+```
+
+顺带修掉两个真实缺陷：脚本不再原地改写被版本管理的 YAML（生成 `configs/data/scannet.local.yaml`，已加入
+`.gitignore`）；**下载中的半截 4RC 文件**会让 `os.path.exists` 判为“有”而在 safetensors 处崩溃，现在降级为
+明确警告并回退随机初始化。
+
 ## 4. 待你决定
 
 1. **ScanNet 到底在哪**：要我在挂载点上跑，请执行
