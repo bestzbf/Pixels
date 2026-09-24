@@ -22,14 +22,30 @@
 |---|---|---|
 | Wan2.1 视频 VAE（共享 latent 接口，126.9 M） | ✅ 已下载并在 GPU 跑通 | ModelScope `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` → `/mnt/data/pixels-weights/wan-vae/vae/`（507,591,892 B，194 tensors 校验通过） |
 | DINOv2-base（346,3 MB）+ CLIP-ViT-L/14（1,710.5 MB） | ✅ 已下载，本机加载成功 | ModelScope `facebook/dinov2-base`、`AI-ModelScope/clip-vit-large-patch14`（注意：`AI-ModelScope/dinov2-base`、`openai/...` 在 ModelScope 上不存在） |
-| **4RC（31 层精化 + 两头的预训练初始化）** | ❌ **拿不到**：ModelScope 无镜像（404），huggingface.co 本机不可达（0 B/s），hf-mirror 亦不通 | 需能访问 HF 的机器拉 `Luo-Yihang/4RC`，或作者另发镜像 |
+| **4RC（预训练 4D 层级 + 两头）** | ✅ **已到手**：`model.safetensors` 6,080,387,740 B（1520.1 M 参数、1078 tensors）+ README | `scripts/fetch_4rc_mirror.sh`（hf-mirror 当时可达；HF 直连与 Drive 均 0 B/s） |
 | Wan2.1/2.2 DiT（采 z^gen，~17 GB/个） | ⏳ 可选，只有做 Table 1 生成评测才需要（ModelScope 有同名仓库） | 未拉，避免占用 17 GB×2 与带宽 |
 
 `scripts/fetch_weights.sh` 走 HF/hf-mirror（本机不通）；本机可用通道另写为 `scripts/fetch_weights_modelscope.sh`，带断点续传与内容长度校验。
 
 缺 4RC 的后果已如实处理：`tools/train.py` 现在**警告后继续随机初始化**（结构与训练动力学有效，绝对数值不可与论文对比）。
 
-**可用的替代初始化**：`l4d/models/init_from.py` 把真实预训练 ViT 灌进冻结精化层级（4RC 本身就建立在
+### 4RC 权重 → L4AR 的映射（实测）
+
+状态字典：`backbone.pretrained.blocks.{0..39}`（40 层、d=1536、融合 `attn.qkv (4608,1536)` ⇒ 24 heads、
+SwiGLU `mlp.w12 (8192,1536)/w3 (1536,4096)` ⇒ FFN 隐层 4096=8/3·d）、`motion_decoder.{self,cross}_blocks.{0..3}`
+（4+4 层，论文列为冻结）、`cam_dec`/`head`/`track_head`。
+
+据此：`mlp_ratio` 从猜测 4.0 改为 **8/3**，否则 fc 形状 (6144,·) 与源 (4096,·) 不匹配而**静默不加载**；
+`init_from.py` 增加 SwiGLU→MLP 显式转换（`w1→fc1`、`w3→fc2`，丢弃门控分支 `w2` 并注明）。
+结果：**copied 480/480 个 block 张量、shape_mismatches = 0**；heads 因 DualDPT/CameraDec 内部结构不同
+仍标注未映射（不强行塞）。论文规模（现 901.8 M 参数、可训练 20.2 M）用真 4RC 初始化在 3090 上
+2 step 反传通过（5.7 s，紧凑 ckpt 0.4 MB）。
+
+一个中途判断被证据推翻并改正：我一度认为 `norm*.weight` 是 `1+γ` 偏移式（若干块均值≈0.0006）。
+按深度查看后是**连续的学习分布**（0.23→0.99→14/15 处下探→深层 0.52~1.02），因此**原样传输才是对的**，
+`+1` 会整体错尺度。启发式已删除，只保留统计报告，并加了断言测试防止再次“好意修正”。
+
+### 4RC 不可得期间的替代初始化：`l4d/models/init_from.py` 把真实预训练 ViT 灌进冻结精化层级（4RC 本身就建立在
 DINOv2 之上）。用本机 `dinov2-base/model.safetensors` 实测 **144/144 个 block 参数命中**（12 block ×
 qkv/proj/fc1/fc2 权重+偏置 + 两个 norm），`norm1.weight` 均值 1.274≠1 证明确实来自预训练而非随机；
 配置见 `configs/model/l4ar_dinov2.yaml`（token_dim 768 / heads 12 / depth 12）。它同时反推出 4RC 到位后

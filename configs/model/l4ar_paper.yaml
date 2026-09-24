@@ -13,7 +13,7 @@ model:
   heads: 24                    # 1536 / 64 per head
   depth: 40                    # vit_giant2 depth; the paper's "31-block" is the late/alternating
   #                          subset (alt_start=13 -> 28) plus the 4-block motion decoder
-  mlp_ratio: 4.0
+  mlp_ratio: 2.6666667      # vit_giant2 FFN hidden = 4096 = 8/3 * 1536 (SwiGLU), so fc1/fc2 shapes load
   drop_path: 0.0
   patch_size: 2            # S_phi stride on the latent lattice; 4RC's image patch is 14, so our
   #                          token grid is coarser - a deliberate deviation, not an unknown

@@ -385,5 +385,32 @@ def test_training_step_prefers_cached_latents():
     assert torch.allclose(latent[:, 15], cached[:, 15] - 1.0)    # (z - mean)/std per channel
 
 
+
+
+def test_source_layernorm_gains_transfer_unchanged(tmp_path: str = "/tmp/pixels_ln_gain"):
+    """A well-meaning +1 offset correction would silently rescale every normalised activation."""
+    import os
+    import shutil
+
+    from safetensors.torch import save_file
+
+    from l4d.models.init_from import load_vit_into_refinement
+
+    net = build_l4ar(L4ARConfig(**{**TINY, "token_dim": 64, "depth": 2}))
+    source = {
+        "backbone.pretrained.blocks.0.norm1.weight": torch.full((64,), 0.01),
+        "backbone.pretrained.blocks.0.norm2.weight": torch.full((64,), 0.5),
+        "backbone.pretrained.blocks.1.norm1.weight": torch.ones(64) * 1.02,
+    }
+    shutil.rmtree(tmp_path, ignore_errors=True)
+    os.makedirs(tmp_path, exist_ok=True)
+    save_file(source, os.path.join(tmp_path, "model.safetensors"))
+    report = load_vit_into_refinement(net.refinement, tmp_path)
+    assert torch.allclose(net.refinement.blocks[0].norm1.weight, torch.full((64,), 0.01), atol=1e-6)
+    assert torch.allclose(net.refinement.blocks[1].norm1.weight, torch.full((64,), 1.02), atol=1e-6)
+    assert report["transfer"] == "raw (no offset correction)"
+    assert report["min_mean_gain"] == 0.01 and report["max_mean_gain"] == 1.02, report
+
+
 if __name__ == "__main__":
     main()

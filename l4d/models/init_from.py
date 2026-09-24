@@ -21,7 +21,9 @@ from typing import Any, Optional
 import torch
 
 LAYER_RE = re.compile(r"^(?:encoder\.)?layer\.(\d+)\.(.+)$")
-HUB_RE = re.compile(r"^blocks\.(\d+)\.(.+)$")
+# Any wrapper prefix is allowed (`backbone.pretrained.blocks.N` in the 4RC checkpoint) as long as the
+# segment is exactly `blocks` - `self_blocks.0` must not match.
+HUB_RE = re.compile(r"(?:^|\.)blocks\.(\d+)\.(.+)$")
 _PREFIXES = ("model.", "vit.", "backbone.", "encoder.")
 
 
@@ -81,10 +83,12 @@ def to_block_tensors(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     grouped: dict[int, dict[str, torch.Tensor]] = defaultdict(dict)
     for key, value in state.items():
         normalised = _normalise_key(key)
-        match = HUB_RE.match(normalised) or LAYER_RE.match(normalised)
+        hub = HUB_RE.search(normalised)
+        layer = LAYER_RE.match(normalised)
+        match = hub if (hub and not layer) else layer
         if not match:
             continue
-        suffix = _mapped(match.group(2), HUB_RE.match(normalised) is not None)
+        suffix = _mapped(match.group(2), hub is not None and layer is None)
         if suffix:
             grouped[int(match.group(1))][suffix] = value
 
@@ -100,7 +104,38 @@ def to_block_tensors(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             if re.match(r"attn\.(query|key|value)\.", name):
                 continue
             out[f"blocks.{index}.{name}"] = value
+
+        # SwiGLU FFN -> plain two-layer MLP: w12 is [w1; w2] fused along the output dim, so w1 becomes
+        # fc1 and w3 becomes fc2. The gate branch w2 has no counterpart in our block and is dropped.
+        if "mlp.w12.weight" in tensors:
+            w12 = tensors["mlp.w12.weight"]
+            half = w12.shape[0] // 2
+            out[f"blocks.{index}.mlp.fc1.weight"] = w12[:half]
+            out[f"blocks.{index}.mlp.fc2.weight"] = tensors["mlp.w3.weight"]
+            if "mlp.w12.bias" in tensors:
+                out[f"blocks.{index}.mlp.fc1.bias"] = tensors["mlp.w12.bias"][:half]
+                out[f"blocks.{index}.mlp.fc2.bias"] = tensors["mlp.w3.bias"]
     return out
+
+
+def norm_gain_report(blocks: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Summary of the source LayerNorm gains, for the log.
+
+    4RC's gains range continuously from ~0 to ~1.02 across depth, which is a learned distribution rather
+    than a `1 + gamma` convention, so the values are transferred unchanged - a well-meaning +1 here would
+    rescale every normalised activation.
+    """
+    gains = [value.float().mean() for name, value in blocks.items() if ".norm" in name and name.endswith(".weight")]
+    if not gains:
+        return {}
+    stacked = torch.stack(gains)
+    return {
+        "norm_gains": int(stacked.numel()),
+        "min_mean_gain": round(float(stacked.min()), 4),
+        "max_mean_gain": round(float(stacked.max()), 4),
+        "near_zero_gains": int((stacked.abs() < 0.05).sum()),
+        "transfer": "raw (no offset correction)",
+    }
 
 
 def load_vit_into_refinement(
@@ -136,6 +171,7 @@ def load_vit_into_refinement(
     if copied:
         refinement.load_state_dict(copied, strict=False)
     return {
+        **norm_gain_report(blocks),
         "source_blocks": len({key.split(".")[1] for key in blocks}),
         "copied": len(copied),
         "block_params": len([name for name in own if name.startswith("blocks.")]),
