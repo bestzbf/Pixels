@@ -26,8 +26,13 @@ def load_model(config_path: str, checkpoint: str | None, device: str):
     model_cfg = load_config(config_path).to_dict()
     model = build_l4ar(L4ARConfig.from_dict(model_cfg["model"])).to(device).eval()
     if checkpoint:
-        state = torch.load(checkpoint, map_location=device, weights_only=False)
-        model.load_state_dict(state["model"] if "model" in state else state, strict=False)
+        from l4d.utils.checkpoint import load_checkpoint
+
+        report = load_checkpoint(model, checkpoint, device)
+        if report.get("frozen_mismatch"):
+            print(f"WARNING: {len(report['frozen_mismatch'])} frozen tensors differ from the ones that trained "
+                  f"(e.g. {report['frozen_mismatch'][:3]}) - the pretrained init of this build is not the "
+                  "training init, so outputs are not meaningful", flush=True)
     return model, model_cfg
 
 

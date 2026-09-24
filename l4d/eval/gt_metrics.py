@@ -19,18 +19,15 @@ SEVEN_SCENES = GTBenchmark("7scenes", sequences=18)
 NRGBD = GTBenchmark("nrgbd", sequences=9)
 
 
-def _subsample(cloud: torch.Tensor, max_points: int, seed: int = 0) -> torch.Tensor:
+def _sample_indices(total: int, max_points: int, seed: int) -> torch.Tensor:
     """Chamfer on 1e5-point clouds is quadratic; a fixed seeded subsample is the standard estimate."""
-    if max_points <= 0 or cloud.shape[0] <= max_points:
-        return cloud
-    generator = torch.Generator().manual_seed(seed)
-    pick = torch.randperm(cloud.shape[0], generator=generator)[:max_points]
-    return cloud[pick]
+    if max_points <= 0 or total <= max_points:
+        return torch.arange(total)
+    return torch.randperm(total, generator=torch.Generator().manual_seed(seed))[:max_points]
 
 
 def _nn_distances(query: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
     """Chunked nearest-neighbour distance from every query point to the reference cloud."""
-    query, reference = _subsample(query, 20000), _subsample(reference, 20000)
     chunk = max(1, int(4e6 / max(reference.shape[0], 1)))
     out = []
     for start in range(0, query.shape[0], chunk):
@@ -42,11 +39,16 @@ def _nn_distances(query: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
 
 def accuracy_completeness(
     pred: torch.Tensor, gt: torch.Tensor, threshold: float = 5.0, normal_pred: torch.Tensor | None = None,
-    normal_gt: torch.Tensor | None = None, angle_threshold: float = 30.0,
+    normal_gt: torch.Tensor | None = None, angle_threshold: float = 30.0, max_points: int = 20000,
 ) -> dict[str, float]:
-    """Acc/Comp in the same length unit as the inputs; NC = normal consistency under the angle gate."""
-    pred = pred.reshape(-1, 3)
-    gt = gt.reshape(-1, 3)
+    """Acc/Comp in the same length unit as the inputs; NC = normal consistency under the angle gate.
+
+    Both clouds are subsampled once, up front, so the normal lookup uses the very points that were scored.
+    """
+    pred_all, gt_all = pred.reshape(-1, 3), gt.reshape(-1, 3)
+    pred_idx = _sample_indices(pred_all.shape[0], max_points, 0)
+    gt_idx = _sample_indices(gt_all.shape[0], max_points, 1)
+    pred, gt = pred_all[pred_idx], gt_all[gt_idx]
     forward = _nn_distances(pred, gt)
     backward = _nn_distances(gt, pred)
     accuracy = forward[forward < threshold]
@@ -57,7 +59,9 @@ def accuracy_completeness(
     }
     if normal_pred is not None and normal_gt is not None:
         nearest = torch.cdist(pred, gt).argmin(dim=-1)
-        cosine = (normal_pred.reshape(-1, 3) * normal_gt.reshape(-1, 3)[nearest]).sum(-1).abs()
+        normals_pred = normal_pred.reshape(-1, 3)[pred_idx]
+        normals_gt = normal_gt.reshape(-1, 3)[gt_idx]
+        cosine = (normals_pred * normals_gt[nearest]).sum(-1).abs()
         gated = cosine[forward < threshold]
         result["normal_consistency"] = float((gated > torch.cos(torch.tensor(angle_threshold * 3.14159265 / 180.0))).float().mean()) if gated.numel() else 0.0
     return result

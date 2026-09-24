@@ -31,8 +31,10 @@ def build_variant(model_cfg: dict, variant: str, device: str, checkpoint: str | 
         cfg[key] = value
     model = build_l4ar(L4ARConfig.from_dict(cfg)).to(device).eval()
     if checkpoint:
-        state = torch.load(checkpoint, map_location=device, weights_only=False)
-        model.load_state_dict(state.get("model", state), strict=False)
+        from l4d.utils.checkpoint import load_checkpoint
+        report = load_checkpoint(model, checkpoint, device)
+        if report.get("frozen_mismatch"):
+            print(f"WARNING: frozen backbone differs from the training init ({report['frozen_mismatch'][:3]})", flush=True)
     return model
 
 

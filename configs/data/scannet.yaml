@@ -5,7 +5,7 @@
 root: data/scannet                      # where prepare_scannet.py writes clips/ gt/ manifest.jsonl
 manifest: data/scannet/manifest.jsonl
 latent_cache: data/scannet/latents
-scannet_root: null                      # <- set to the local ScanNet directory (e.g. a mounted share)
+scannet_root: null                      # set by scripts/train_on_scannet.sh
 split_file: null                        # <- scannetv2_train.txt when you want the official split
 
 datasets: [scannet]

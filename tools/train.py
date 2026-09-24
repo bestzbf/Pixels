@@ -136,9 +136,13 @@ def run_stage(model: L4AR, stage: dict, data_cfg: dict, train_cfg: dict, device:
         optimizer.step()
         if step % int(train_cfg.get("log_every", 1)) == 0 or step == steps:
             print(f"[{stage['name']}] step {step}/{steps} loss={losses['loss'].item():.4f} {summarize(losses)}", flush=True)
+    from l4d.utils.checkpoint import save_checkpoint
+
     checkpoint = os.path.join(log_dir, f"{stage['name']}.pt")
-    torch.save({"model": model.state_dict(), "config": train_cfg["model_cfg"], "stage": stage}, checkpoint)
-    print(f"[{stage['name']}] saved {checkpoint} in {time.time() - started:.1f}s", flush=True)
+    info = save_checkpoint(checkpoint, model, train_cfg["model_cfg"], stage,
+                           full=train_cfg.get("save_full", False), init_source=train_cfg.get("init_source", "random"))
+    print(f"[{stage['name']}] saved {checkpoint} in {time.time() - started:.1f}s "
+          f"({info['kind']}: {info['tensors']} tensors, {info['mb']} MB)", flush=True)
     return checkpoint
 
 
@@ -151,12 +155,14 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=None, help="override the stage step budget")
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", default=None)
+    parser.add_argument("--save-full", action="store_true", help="store the frozen backbone too (~4.6 GB per stage at paper scale)")
     args = parser.parse_args()
 
     model_cfg = load_config(args.model).to_dict()
     data_cfg = load_config(args.data).to_dict()
     train_cfg = load_config(args.train).to_dict()
     train_cfg["model_cfg"] = model_cfg
+    train_cfg["save_full"] = args.save_full
     device = args.device or train_cfg.get("device", "cpu")
     if device.startswith("cuda") and not torch.cuda.is_available():
         print("cuda unavailable, falling back to cpu", flush=True)
@@ -167,6 +173,7 @@ def main() -> None:
 
     model = build_model_from_config(model_cfg).to(device)
     init = model_cfg.get("pretrained_init", {})
+    train_cfg["init_source"] = "random"
     checkpoint = init.get("checkpoint")
     if checkpoint and not os.path.exists(checkpoint):
         print(
@@ -178,11 +185,13 @@ def main() -> None:
     elif checkpoint:
         from l4d.models.l4ar import load_4rc_init
 
+        train_cfg["init_source"] = "4RC"
         print("4RC init:", json.dumps(load_4rc_init(model, checkpoint, bool(init.get("strict", False)))), flush=True)
     elif init.get("vit"):
         from l4d.models.init_from import load_vit_into_refinement
 
         report = load_vit_into_refinement(model.refinement, init["vit"], max_blocks=model.cfg.depth)
+        train_cfg["init_source"] = "vit"
         print(
             f"pretrained ViT init from {init['vit']}: copied {report['copied']}/{report['block_params']} "
             f"block params from {report['source_blocks']} source blocks",

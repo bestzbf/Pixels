@@ -317,3 +317,18 @@ def test_vit_init_fills_the_refinement_blocks(tmp_path=None):
         assert name in dict(net.refinement.named_parameters())
     assert torch.allclose(net.refinement.blocks[0].attn.qkv.base.weight.sum().float(),
                           net.refinement.blocks[0].attn.qkv.base.weight.detach().float().sum())
+
+
+def test_gt_metrics_subsample_large_clouds_consistently():
+    """Clouds past the sampling cap must keep normals aligned with the points actually scored."""
+    from l4d.eval.gt_metrics import accuracy_completeness
+
+    torch.manual_seed(0)
+    cloud = torch.randn(30000, 3) * 3
+    shifted = cloud + 0.01 * torch.randn_like(cloud)
+    normals = F.normalize(torch.randn_like(cloud), dim=-1)
+    scores = accuracy_completeness(cloud, shifted, threshold=0.2, normal_pred=normals, normal_gt=normals)
+    assert scores["accuracy"] < 0.1 and scores["completeness"] < 0.1, scores
+    assert scores["normal_consistency"] > 0.95, scores          # same normals both sides => near 1.0
+    exact = accuracy_completeness(cloud, cloud, threshold=0.05, normal_pred=normals, normal_gt=normals)
+    assert exact["accuracy"] < 1e-4 and exact["normal_consistency"] > 0.999, exact
