@@ -425,10 +425,10 @@ def test_cam_dec_camera_head_transfers_by_name(tmp_path: str = "/tmp/pixels_camd
 
     cfg = L4ARConfig(**{**TINY, "token_dim": 64, "depth": 2, "camera_layout": "cam_dec"})
     net = build_l4ar(cfg)
-    width = cfg.token_dim * 2
+    dim, width = cfg.token_dim, cfg.token_dim * 2  # attention is d-wide, the heads see 2d taps
     source = {
-        "backbone.pretrained.blocks.0.attn.qkv.weight": torch.randn(3 * width, width),
-        "backbone.pretrained.blocks.1.attn.qkv.weight": torch.randn(3 * width, width),
+        "backbone.pretrained.blocks.0.attn.qkv.weight": torch.randn(3 * dim, dim),
+        "backbone.pretrained.blocks.1.attn.qkv.weight": torch.randn(3 * dim, dim),
         "cam_dec.backbone.0.weight": torch.randn(width, width),
         "cam_dec.backbone.0.bias": torch.randn(width),
         "cam_dec.backbone.2.weight": torch.randn(width, width),
@@ -445,9 +445,73 @@ def test_cam_dec_camera_head_transfers_by_name(tmp_path: str = "/tmp/pixels_camd
     save_file({key: value.contiguous() for key, value in source.items()}, os.path.join(tmp_path, "model.safetensors"))
     report = load_4rc_init(net, tmp_path)
     assert report["camera_head_copied"] == 10, report
+    assert report["copied"] == 2, report  # the two block qkv tensors, not just the head
     head = net.decoder.camera_head.state_dict()
     assert torch.equal(head["fc_qvec.weight"], source["cam_dec.fc_qvec.weight"])
     assert torch.equal(head["backbone.0.weight"], source["cam_dec.backbone.0.weight"])
+
+
+def test_trainable_only_checkpoint_needs_the_training_init(tmp_path: str = "/tmp/pixels_init_contract"):
+    """A trainable-only checkpoint restored on a fresh random backbone answers a different question.
+
+    This is the bug that made the first 4RC-init evaluation read as though nothing had been trained: the
+    frozen hierarchy is not in the checkpoint, so restoring heads without rebuilding the backbone they
+    were trained against silently invalidates the number.
+    """
+    import os
+    import shutil
+
+    from safetensors.torch import save_file
+
+    from l4d.models.l4ar import apply_pretrained_init, build_initialised_model
+    from l4d.utils.checkpoint import load_checkpoint, save_checkpoint
+
+    cfg = {**TINY, "depth": 2, "camera_layout": "cam_dec"}
+    dim, width = cfg["token_dim"], cfg["token_dim"] * 2  # attention is d-wide, the heads see 2d taps
+    source = {
+        "backbone.pretrained.blocks.0.attn.qkv.weight": torch.randn(3 * dim, dim),
+        "backbone.pretrained.blocks.1.attn.qkv.weight": torch.randn(3 * dim, dim),
+        "cam_dec.backbone.0.weight": torch.randn(width, width),
+        "cam_dec.backbone.0.bias": torch.randn(width),
+        "cam_dec.backbone.2.weight": torch.randn(width, width),
+        "cam_dec.backbone.2.bias": torch.randn(width),
+        "cam_dec.fc_t.weight": torch.randn(3, width),
+        "cam_dec.fc_t.bias": torch.randn(3),
+        "cam_dec.fc_qvec.weight": torch.randn(4, width),
+        "cam_dec.fc_qvec.bias": torch.randn(4),
+        "cam_dec.fc_fov.0.weight": torch.randn(2, width),
+        "cam_dec.fc_fov.0.bias": torch.randn(2),
+    }
+    shutil.rmtree(tmp_path, ignore_errors=True)
+    os.makedirs(tmp_path)
+    save_file({key: value.contiguous() for key, value in source.items()}, os.path.join(tmp_path, "model.safetensors"))
+
+    torch.manual_seed(3)
+    trained = build_l4ar(L4ARConfig(**cfg))
+    assert apply_pretrained_init(trained, {"checkpoint": tmp_path}) == "4RC"
+    trained.set_stage(3)
+    with torch.no_grad():
+        for name, param in trained.named_parameters():
+            if "lora" in name or "camera_head" in name or "alignment" in name:
+                param.add_(0.02)
+    torch.manual_seed(11)
+    sample = latent()
+    trained.eval()
+    expected = trained(sample)["points"]
+    save_checkpoint(os.path.join(tmp_path, "stage3.pt"), trained, {}, {}, init_source="4RC")
+
+    # the same seed reproduces the tensors the fixture leaves random, so only the init can differ here
+    torch.manual_seed(3)
+    restored = build_initialised_model({"model": dict(cfg), "pretrained_init": {"checkpoint": tmp_path}})
+    report = load_checkpoint(restored, os.path.join(tmp_path, "stage3.pt"))
+    assert not report["frozen_mismatch"], report
+    assert torch.allclose(restored(sample)["points"], expected, atol=1e-5)
+
+    torch.manual_seed(3)
+    naive = build_l4ar(L4ARConfig(**cfg)).eval()  # the pre-fix evaluation path: heads restored, backbone random
+    mismatched = load_checkpoint(naive, os.path.join(tmp_path, "stage3.pt"))
+    assert mismatched["frozen_mismatch"], mismatched
+    assert not torch.allclose(naive(sample)["points"], expected, atol=1e-5)
 
 
 def test_checkpoint_load_reports_tensors_the_model_dropped(tmp_path: str = "/tmp/pixels_ckpt_drop"):

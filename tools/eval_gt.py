@@ -22,7 +22,7 @@ import torch
 from l4d.data.dataset import ReconstructionClips, SyntheticClips, load_manifest
 from l4d.eval.gt_metrics import GTBenchmark, NRGBD, SEVEN_SCENES, evaluate_prediction
 from l4d.eval.protocol import TABLE_3_REFERENCE, TABLE_3_VARIANTS
-from l4d.models.l4ar import L4ARConfig, build_l4ar
+from l4d.models.l4ar import L4ARConfig, apply_pretrained_init, build_l4ar
 from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
 from l4d.utils.config import load_config
 
@@ -33,12 +33,19 @@ def build_variant(model_cfg: dict, variant: str, device: str, checkpoint: str | 
     cfg = copy.deepcopy(model_cfg["model"])
     for key, value in TABLE_3_VARIANTS[variant].items():
         cfg[key] = value
-    model = build_l4ar(L4ARConfig.from_dict(cfg)).to(device).eval()
+    model = build_l4ar(L4ARConfig.from_dict(cfg)).to(device)
+    # same contract as tools/eval_recon.py: rebuild the frozen backbone training saw before restoring heads
+    apply_pretrained_init(model, model_cfg.get("pretrained_init", {}))
+    model.eval()
     if checkpoint:
         from l4d.utils.checkpoint import load_checkpoint
         report = load_checkpoint(model, checkpoint, device)
         if report.get("frozen_mismatch"):
-            print(f"WARNING: frozen backbone differs from the training init ({report['frozen_mismatch'][:3]})", flush=True)
+            print(
+                f"WARNING: frozen backbone differs from the training init ({report['frozen_mismatch'][:3]}) - "
+                "this model is not the one that was trained, so its numbers are not comparable",
+                flush=True,
+            )
     return model
 
 

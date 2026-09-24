@@ -216,6 +216,17 @@ def build_l4ar(config: dict[str, Any] | L4ARConfig) -> L4AR:
     return L4AR(cfg)
 
 
+def build_initialised_model(model_cfg: dict[str, Any], device: str = "cpu") -> L4AR:
+    """Build a model the way `train.py` does: architecture plus the pretrained init it started from.
+
+    Trainable-only checkpoints do not carry the frozen backbone, so every tool that restores one has to
+    reproduce that init or it reads the trained heads through a different network.
+    """
+    model = build_l4ar(L4ARConfig.from_dict(model_cfg["model"])).to(device)
+    apply_pretrained_init(model, model_cfg.get("pretrained_init", {}))
+    return model.eval()
+
+
 def load_4rc_init(model: "L4AR", checkpoint: str, strict: bool = False) -> dict[str, Any]:
     """Initialise the refinement hierarchy from a 4RC checkpoint.
 
@@ -247,3 +258,62 @@ def load_4rc_init(model: "L4AR", checkpoint: str, strict: bool = False) -> dict[
     if strict:
         raise ValueError("strict=True is unsupported for foreign head layouts: only backbone blocks map cleanly")
     return report
+
+
+def apply_pretrained_init(model: "L4AR", init: dict[str, Any]) -> str:
+    """Reproduce the initialisation a checkpoint was trained against.
+
+    Trained checkpoints store only trainable tensors, so any tool that restores one has to rebuild the
+    frozen backbone exactly as `train.py` did - a fresh random backbone silently invalidates the eval.
+    Returns the source of the *frozen backbone* that landed: a config whose checkpoint exists but transfers
+    no block tensors (wrong token_dim/depth) stays 'random' rather than claiming a pretrained init.
+    """
+    import json
+    import os
+
+    checkpoint = init.get("checkpoint")
+    if checkpoint and not os.path.exists(checkpoint):
+        print(
+            f"WARNING: 4RC init weights absent ({checkpoint}) - continuing with random initialisation. "
+            "Structure and training dynamics are still valid; the paper's numbers are not comparable until "
+            "the pretrained hierarchy is fetched (see scripts/fetch_weights.sh).",
+            flush=True,
+        )
+        return "random"
+    if checkpoint:
+        try:
+            report = load_4rc_init(model, checkpoint, bool(init.get("strict", False)))
+        except Exception as error:  # noqa: BLE001 - a half-fetched checkpoint must not kill a run
+            print(
+                f"WARNING: 4RC checkpoint unusable ({type(error).__name__}: {str(error)[:120]}) - if a download "
+                "is still running, wait for scripts/fetch_4rc_mirror.sh to print DONE before relying on this init; "
+                "continuing with random initialisation.",
+                flush=True,
+            )
+            return "random"
+        print("4RC init:", json.dumps(report), flush=True)
+        if report["copied"]:
+            return "4RC"
+        print(
+            f"  no block tensors copied - token_dim/depth/heads do not match the checkpoint; "
+            f"camera head took {report.get('camera_head_copied', 0)}/{report.get('camera_head_params', 0)} "
+            "tensors, which are trainable and so are overwritten from stage 2 on. Backbone is random.",
+            flush=True,
+        )
+        return "random"
+    if init.get("vit"):
+        from .init_from import load_vit_into_refinement
+
+        report = load_vit_into_refinement(model.refinement, init["vit"], max_blocks=model.cfg.depth)
+        print(
+            f"pretrained ViT init from {init['vit']}: copied {report['copied']}/{report['block_params']} "
+            f"block params from {report['source_blocks']} source blocks",
+            flush=True,
+        )
+        if report["shape_mismatches"]:
+            print("  shape mismatches (first 6):", json.dumps(report["shape_mismatches"]), flush=True)
+        if not report["copied"]:
+            print("  nothing copied - check token_dim/heads against the checkpoint", flush=True)
+            return "random"
+        return "vit"
+    return "random"

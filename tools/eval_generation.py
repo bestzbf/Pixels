@@ -23,7 +23,7 @@ from l4d.eval.projection_metrics import (
     ProjectionEvaluator,
     SurrogateExtractor,
 )
-from l4d.models.l4ar import L4ARConfig, build_l4ar
+from l4d.models.l4ar import build_initialised_model
 from l4d.utils.config import load_config
 
 
@@ -81,7 +81,7 @@ def main() -> None:
 
     eval_cfg = load_config(args.eval_cfg).to_dict()
     model_cfg = load_config(args.model).to_dict()
-    model = build_l4ar(L4ARConfig.from_dict(model_cfg["model"])).to(args.device).eval()
+    model = build_initialised_model(model_cfg, args.device)
     if args.checkpoint:
         from l4d.utils.checkpoint import load_checkpoint
         report = load_checkpoint(model, args.checkpoint, args.device)

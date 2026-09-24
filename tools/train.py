@@ -26,7 +26,7 @@ from l4d.data.dataset import (
     ReconstructionClips,
 )
 from l4d.losses.objectives import LatentTo4DLoss, LossConfig
-from l4d.models.l4ar import L4AR, L4ARConfig, build_l4ar
+from l4d.models.l4ar import L4AR, L4ARConfig, apply_pretrained_init, build_l4ar
 from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
 from l4d.utils.config import load_config
 
@@ -186,6 +186,9 @@ def main() -> None:
     train_cfg = load_config(args.train).to_dict()
     train_cfg["model_cfg"] = model_cfg
     train_cfg["save_full"] = args.save_full
+    for stage in train_cfg.get("stages", []):
+        # provenance: the per-stage `data:` entries are the paper's plan, --data is what actually ran
+        stage["data"] = args.data
     device = args.device or train_cfg.get("device", "cpu")
     if device.startswith("cuda") and not torch.cuda.is_available():
         print("cuda unavailable, falling back to cpu", flush=True)
@@ -195,44 +198,7 @@ def main() -> None:
     os.makedirs(log_dir, exist_ok=True)
 
     model = build_model_from_config(model_cfg).to(device)
-    init = model_cfg.get("pretrained_init", {})
-    train_cfg["init_source"] = "random"
-    checkpoint = init.get("checkpoint")
-    if checkpoint and not os.path.exists(checkpoint):
-        print(
-            f"WARNING: 4RC init weights absent ({checkpoint}) - continuing with random initialisation. "
-            "Structure and training dynamics are still valid; the paper's numbers are not comparable until "
-            "the pretrained hierarchy is fetched (see scripts/fetch_weights.sh).",
-            flush=True,
-        )
-    elif checkpoint:
-        from l4d.models.l4ar import load_4rc_init
-
-        try:
-            report = load_4rc_init(model, checkpoint, bool(init.get("strict", False)))
-            train_cfg["init_source"] = "4RC"
-            print("4RC init:", json.dumps(report), flush=True)
-        except Exception as error:  # noqa: BLE001 - a half-fetched checkpoint must not kill a run
-            print(
-                f"WARNING: 4RC checkpoint unusable ({type(error).__name__}: {str(error)[:120]}) - if a download "
-                "is still running, wait for scripts/fetch_4rc_mirror.sh to print DONE before relying on this init; "
-                "continuing with random initialisation.",
-                flush=True,
-            )
-    elif init.get("vit"):
-        from l4d.models.init_from import load_vit_into_refinement
-
-        report = load_vit_into_refinement(model.refinement, init["vit"], max_blocks=model.cfg.depth)
-        train_cfg["init_source"] = "vit"
-        print(
-            f"pretrained ViT init from {init['vit']}: copied {report['copied']}/{report['block_params']} "
-            f"block params from {report['source_blocks']} source blocks",
-            flush=True,
-        )
-        if report["shape_mismatches"]:
-            print("  shape mismatches (first 6):", json.dumps(report["shape_mismatches"]), flush=True)
-        if not report["copied"]:
-            print("  nothing copied - check token_dim/heads against the checkpoint", flush=True)
+    train_cfg["init_source"] = apply_pretrained_init(model, model_cfg.get("pretrained_init", {}))
     stages = train_cfg["stages"]
     if args.stage:
         stages = [stage for stage in stages if stage["name"] == args.stage]

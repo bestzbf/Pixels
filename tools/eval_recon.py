@@ -18,7 +18,7 @@ import torch
 from l4d.data.dataset import ReconstructionClips, load_manifest
 from l4d.eval.gt_metrics import accuracy_completeness
 from l4d.losses.objectives import align_points_scale
-from l4d.models.l4ar import L4ARConfig, build_l4ar, vae_spec_from_dict
+from l4d.models.l4ar import build_initialised_model, vae_spec_from_dict
 from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
 from l4d.utils.config import load_config
 
@@ -52,15 +52,19 @@ def main() -> None:
 
     model_cfg = load_config(args.model).to_dict()
     data_cfg = load_config(args.data).to_dict()
-    model = build_l4ar(L4ARConfig.from_dict(model_cfg["model"])).to(args.device).eval()
+    model = build_initialised_model(model_cfg, args.device)
     if args.checkpoint and not args.from_scratch:
         from l4d.utils.checkpoint import load_checkpoint
 
         report = load_checkpoint(model, args.checkpoint, args.device)
         if report.get("frozen_mismatch"):
-            print(f"WARNING: frozen backbone differs from the training init ({report['frozen_mismatch'][:3]})", flush=True)
+            print(
+                f"WARNING: frozen backbone differs from the training init ({report['frozen_mismatch'][:3]}) - "
+                "this model is not the one that was trained, so its numbers are not comparable",
+                flush=True,
+            )
     else:
-        print("baseline: randomly initialised model (no checkpoint loaded)")
+        print("baseline: pretrained init only, no trained tensors loaded", flush=True)
 
     spec = vae_spec_from_dict(model_cfg["model"]["vae"])
     vae = (SyntheticVideoVAE(spec) if model_cfg["model"]["vae"].get("backend") == "synthetic"

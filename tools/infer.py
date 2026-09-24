@@ -17,14 +17,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from l4d.models.l4ar import L4ARConfig, build_l4ar, vae_spec_from_dict
+from l4d.models.l4ar import build_initialised_model, vae_spec_from_dict
 from l4d.models.video_interface import CompatibleGenerators, LatentProvenance, SharedLatentInterface, SyntheticVideoVAE, WanVideoVAE
 from l4d.utils.config import load_config
 
 
 def load_model(config_path: str, checkpoint: str | None, device: str):
     model_cfg = load_config(config_path).to_dict()
-    model = build_l4ar(L4ARConfig.from_dict(model_cfg["model"])).to(device).eval()
+    model = build_initialised_model(model_cfg, device)
     if checkpoint:
         from l4d.utils.checkpoint import load_checkpoint
 

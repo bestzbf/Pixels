@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 
 from l4d.eval.residual_probe import ResidualSensitivityStudy, near_terminal_residual, null_space_component, width_null_space
-from l4d.models.l4ar import L4ARConfig, build_l4ar, vae_spec_from_dict
+from l4d.models.l4ar import build_initialised_model, vae_spec_from_dict
 from l4d.models.video_interface import SyntheticVideoVAE
 from l4d.utils.config import load_config
 
@@ -46,7 +46,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
     model_cfg = load_config(args.model).to_dict()
     spec = vae_spec_from_dict(model_cfg["model"]["vae"])
-    model = build_l4ar(L4ARConfig.from_dict(model_cfg["model"])).to(args.device).eval()
+    model = build_initialised_model(model_cfg, args.device)
     if args.checkpoint:
         state = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
         model.load_state_dict(state.get("model", state), strict=False)
