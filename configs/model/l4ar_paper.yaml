@@ -1,26 +1,36 @@
-# Paper-scale L4AR configuration (arXiv:2608.10744). Dimensions that the main text does not state are
-# marked `verify` and listed in docs/PAPER_ANALYSIS.md section 8.
+# Paper-scale L4AR configuration (arXiv:2608.10744).
+#
+# Architecture values are read off the upstream 4RC source (github.com/Luo-Yihang/4RC, ICML 2026),
+# the reconstructor this paper initialises from:
+#   arc/models/arc/arc.py            DinoV2(name="vitg", out_layers=[19,27,33,39], alt_start=13,
+#                                      qknorm_start=13, rope_start=13, cat_token=True, has_time_token=True)
+#                                    DualDPT(dim_in=3072, features=256), CameraDec(dim_in=3072),
+#                                    MotionDecoder(embed_dim=1536, depth=4)   <- frozen per the paper
+#   arc/models/arc/heads/cam_dec.py  pose_enc = cat([t(3), qvec(4), fov(2)]), ReLU on fov
+#   arc/models/arc/dinov2/dinov2.py  "vitg" = vit_giant2: width 1536, 40 blocks, 24 heads, patch 14
 model:
-  token_dim: 1024          # verify: 4RC hierarchy width
-  heads: 16                # verify
-  depth: 31                # paper: "31-block refinement hierarchy"
+  token_dim: 1536              # vit_giant2 width, read off the 4RC source (was a 1024 guess)
+  heads: 24                    # 1536 / 64 per head
+  depth: 40                    # vit_giant2 depth; the paper's "31-block" is the late/alternating
+  #                          subset (alt_start=13 -> 28) plus the 4-block motion decoder
   mlp_ratio: 4.0
-  drop_path: 0.0           # verify
-  patch_size: 2            # verify: latent-grid -> token-grid stride of S_phi
+  drop_path: 0.0
+  patch_size: 2            # S_phi stride on the latent lattice; 4RC's image patch is 14, so our
+  #                          token grid is coarser - a deliberate deviation, not an unknown
   align_kernel: [1, 2, 2]  # learned local 3D convolution S_phi
   grid_mode: trilinear     # fixed resampler R
   use_local_conv: true
-  tap_after: [6, 13, 20, 27, 30]   # verify: multi-level depths (DINOv2-style quartiles)
-  initial_frame_blocks: 1  # paper: per-frame structure first, then alternate
+  tap_after: [18, 26, 32, 38]      # 0-based form of 4RC out_layers=[19,27,33,39]
+  initial_frame_blocks: 13 # 4RC alt_start=13: frame-wise up to block 12, then alternate
   scope_policy: full       # full | frame_only (w/o Global) | global_only (w/o Frame)
   lora_rank: 16            # paper: rank-16 LoRA on the refinement hierarchy
   lora_alpha: 32
-  geometry_hidden: 256     # verify
-  camera_hidden: 512       # verify
-  camera_encoding_dim: 9   # paper: 9D pose-FOV camera parameterization
+  geometry_hidden: 256         # DualDPT features=256
+  camera_hidden: 512       # upstream CameraDec hides at dim_in/2; not stated for our variant
+  camera_encoding_dim: 9       # verified: translation(3)+quaternion(4)+fov(2), ReLU on fov
   ray_space: world         # world-space ray directions (Eq. 6)
-  use_camera_tokens: true  # frozen camera tokens  } reused from 4RC
-  use_time_tokens: true    # frozen time tokens    }
+  use_camera_tokens: true  # 4RC cat_token=True
+  use_time_tokens: true    # 4RC has_time_token=True
   vae:
     name: wan2.1-vae
     backend: wan
