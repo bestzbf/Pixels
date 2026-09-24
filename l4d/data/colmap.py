@@ -201,6 +201,107 @@ def _splat_depth(points: np.ndarray, entry: dict, camera: ColmapCamera, ideal: n
     return depth
 
 
+def _find_depth(depth_dir: Optional[str], name: str, order: int = 0, total: int = 0) -> Optional[str]:
+    """Prefer a real per-view depth map over reprojecting the sparse cloud.
+
+    Renamed conversions (`000_depth.png` against a `frame_000.png` pose record) fall back to the
+    k-th sorted file, which is how those datasets are written out.
+    """
+    if not depth_dir or not os.path.isdir(depth_dir):
+        return None
+    stem = os.path.splitext(os.path.basename(name))[0]
+    for suffix in (".png", ".npy", ".npz", ".exr", ".tiff"):
+        candidate = os.path.join(depth_dir, stem + suffix)
+        if os.path.exists(candidate):
+            return candidate
+    entries = sorted(os.listdir(depth_dir))
+    matches = [entry for entry in entries if os.path.splitext(entry)[0] == stem]
+    if matches:
+        return os.path.join(depth_dir, matches[0])
+    files = [entry for entry in entries if entry.lower().endswith((".png", ".npy", ".npz", ".exr", ".tiff"))]
+    if files and total and len(files) >= total and order < len(files):
+        return os.path.join(depth_dir, files[order])
+    return None
+
+
+def _depth_to_millimetres(path: str, size: tuple[int, int]) -> np.ndarray:
+    height, width = size
+    if path.endswith(".npy"):
+        values = np.load(path).astype(np.float64)
+        return (values * 1000.0 if values.max() < 1000 else values).astype(np.uint16)
+    raw = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if raw is None:
+        raise FileNotFoundError(path)
+    values = raw.astype(np.float64)
+    if values.ndim == 3:
+        values = values[..., 0]
+    if np.issubdtype(raw.dtype, np.floating) or values.max() < 1000:
+        values = values * 1000.0  # float depth maps are metres; uint16 maps are already millimetres
+    if values.shape[:2] != (height, width):
+        values = cv2.resize(values, (width, height), interpolation=cv2.INTER_NEAREST)
+    return np.clip(values, 0, 65535).astype(np.uint16)
+
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _candidate_folders(image_root: str, model_dir: str) -> list[str]:
+    roots = [image_root, os.path.dirname(image_root), model_dir, os.path.dirname(model_dir),
+             os.path.dirname(os.path.dirname(model_dir))]
+    folders: list[str] = []
+    for root in roots:
+        for folder in (root, os.path.join(root, "images")):
+            if folder not in folders:
+                folders.append(folder)
+    return folders
+
+
+def _ordered_files(folder: str) -> list[str]:
+    return sorted(
+        os.path.join(folder, name) for name in os.listdir(folder) if name.lower().endswith(IMAGE_SUFFIXES)
+    )
+
+
+def _resolve_source(image_root: str, model_dir: str, name: str, order: int = 0) -> Optional[str]:
+    """COLMAP names may be relative to the model dir, the images/ folder, or the scene root.
+
+    Converted NeRF/LLFF-style scenes keep `tiny_poses.txt` order but rename frames (`000_color.png`), so
+    when no name matches the k-th pose falls back to the k-th sorted image of the folder.
+    """
+    base = os.path.basename(name)
+    stem = os.path.splitext(base)[0]
+    for folder in _candidate_folders(image_root, model_dir):
+        if not os.path.isdir(folder):
+            continue
+        for candidate in (os.path.join(folder, name), os.path.join(folder, base)):
+            if os.path.isfile(candidate):
+                return candidate
+        matches = [path for path in _ordered_files(folder) if os.path.splitext(os.path.basename(path))[0] == stem]
+        if matches:
+            return matches[0]
+    for folder in _candidate_folders(image_root, model_dir):
+        if os.path.isdir(folder):
+            files = _ordered_files(folder)
+            if files and order < len(files):
+                return files[order]
+    return None
+
+
+def _nearest_dir_ancestor_with(model_dir: str, names: tuple[str, ...]) -> Optional[str]:
+    """COLMAP layouts differ: `scene/sparse/0` plus `scene/images` and `scene/depths`."""
+    current = os.path.abspath(model_dir)
+    for _ in range(5):
+        for name in names:
+            candidate = os.path.join(current, name)
+            if os.path.isdir(candidate):
+                return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
 def scene_to_scannet_tree(
     model_dir: str,
     image_root: str,
@@ -211,52 +312,76 @@ def scene_to_scannet_tree(
     splat_radius: int = 2,
     frame_stride: int = 1,
     min_frames: int = 5,
+    depth_dir: Optional[str] = None,
 ) -> Optional[str]:
-    """Materialise one COLMAP scene as a ScanNet-style directory; returns its path or None."""
-    text = os.path.join(model_dir, "cameras.txt")
-    cameras = read_cameras(text if os.path.exists(text) else model_dir)
-    images_path = os.path.join(model_dir, "images.txt")
-    entries = read_images(images_path)
+    """Materialise one COLMAP scene as a ScanNet-style directory; returns its path or None.
+
+    Per-view depth maps on disk win over reprojecting `points3D`; a scene whose depth ends up covering
+    under 1% of pixels is dropped rather than exported as an unsupervisable clip.
+    """
+    cameras = read_cameras(os.path.join(model_dir, "cameras.txt"))
+    entries = read_images(os.path.join(model_dir, "images.txt"))
     points_file = os.path.join(model_dir, "points3D.txt")
     points = read_points3D(points_file) if os.path.exists(points_file) else np.zeros((0, 3))
     if not entries or not cameras:
         return None
 
     positions = list(range(0, len(entries), max(frame_stride, 1)))[:max_frames]
-    target_length = 1 + 4 * ((len(positions) - 1) // 4)  # the Wan VAE needs 4k+1 frames
-    positions = positions[:target_length]
-    if not positions:
+    positions = positions[: 1 + 4 * ((len(positions) - 1) // 4)]  # the Wan VAE needs 4k+1 frames
+    if len(positions) < min_frames:
         return None
 
+    if depth_dir is None:
+        depth_dir = _nearest_dir_ancestor_with(model_dir, ("depths", "depth", "render_depth"))
+    expected_frames = len(positions)
+    used_dense = False
     scene_dir = os.path.join(out_root, f"{scene_name}_00")
     shutil.rmtree(scene_dir, ignore_errors=True)
     os.makedirs(os.path.join(scene_dir, "intrinsic"), exist_ok=True)
-    written = 0
+
+    ideal: Optional[np.ndarray] = None
+    coverages: list[float] = []
     for order, index in enumerate(positions):
         entry = entries[index]
-        camera = cameras[entry["camera_id"]]
-        source = os.path.join(image_root, entry["name"])
-        if not os.path.exists(source):
-            source = os.path.join(model_dir, entry["name"])
-        if not os.path.exists(source):
+        camera = cameras.get(entry["camera_id"])
+        source = _resolve_source(image_root, model_dir, entry["name"], order)
+        if camera is None or source is None:
             continue
         image = cv2.imread(source)
         if image is None:
             continue
         map1, map2, ideal = _undistort_maps(camera, size)
-        undistorted = cv2.remap(image, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        cv2.imwrite(os.path.join(scene_dir, f"frame-{order:06d}.jpg"), undistorted)
-        depth = _splat_depth(points, entry, camera, ideal, size, splat_radius)
-        cv2.imwrite(os.path.join(scene_dir, f"frame-{order:06d}-depth.png"), (depth * 1000.0).astype(np.uint16))
+        cv2.imwrite(
+            os.path.join(scene_dir, f"frame-{order:06d}.jpg"),
+            cv2.remap(image, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE),
+        )
+        depth_file = _find_depth(depth_dir, entry["name"], len(coverages), expected_frames)
+        if depth_file is not None:
+            depth_mm = _depth_to_millimetres(depth_file, size)
+            used_dense = used_dense or bool((depth_mm > 0).any())
+        else:
+            sparse = _splat_depth(points, entry, camera, ideal, size, splat_radius)
+            depth_mm = (sparse * 1000.0).astype(np.uint16)
+        cv2.imwrite(os.path.join(scene_dir, f"frame-{order:06d}-depth.png"), depth_mm)
         rotation = qvec2rotmat(entry["qvec"])
         pose = np.eye(4)
         pose[:3, :3] = rotation.T
         pose[:3, 3] = -rotation.T @ entry["tvec"]
         np.savetxt(os.path.join(scene_dir, f"frame-{order:06d}-pose.txt"), pose, fmt="%.8f")
-        if written == 0:
-            np.savetxt(os.path.join(scene_dir, "intrinsic", "intrinsic_depth.txt"), ideal, fmt="%.8f")
-        written += 1
-    return scene_dir if written >= min_frames else None
+        coverages.append(float((depth_mm > 0).mean()))
+
+    if len(coverages) < min_frames or ideal is None:
+        shutil.rmtree(scene_dir, ignore_errors=True)
+        return None
+    coverage = float(np.mean(coverages))
+    if coverage < 0.01:
+        print(f"[skip ] {scene_name}: depth coverage {coverage*100:.2f}% cannot supervise Eq. 7", flush=True)
+        shutil.rmtree(scene_dir, ignore_errors=True)
+        return None
+    np.savetxt(os.path.join(scene_dir, "intrinsic", "intrinsic_depth.txt"), ideal, fmt="%.8f")
+    print(f"[depth ] {scene_name}: {'dense per-view maps' if used_dense else 'points3D splat'} "
+          f"coverage={coverage*100:.1f}% over {len(coverages)} frames", flush=True)
+    return scene_dir
 
 
 def scene_stats(model_dir: str) -> dict:

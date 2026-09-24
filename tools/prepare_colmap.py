@@ -18,16 +18,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from l4d.data.colmap import find_model_dirs, scene_stats, scene_to_scannet_tree
 from l4d.data.dataset import load_manifest, manifest_report
-from l4d.data.scannet import export_manifest
+from l4d.data.scannet import discover_scenes, export_manifest
 
 
 def resolve_image_root(model_dir: str) -> str:
-    """COLMAP names are relative to the reconstruction root, usually a sibling `images/` folder."""
-    parent = os.path.dirname(model_dir)
-    for candidate in (os.path.join(parent, "images"), parent, os.path.join(model_dir, "images")):
-        if os.path.isdir(candidate):
-            return candidate
-    return parent
+    """The directory whose `images/` folder actually holds the reconstruction's frames."""
+    parents = [model_dir]
+    for _ in range(4):
+        parents.append(os.path.dirname(parents[-1]))
+    for parent in parents:
+        candidate = os.path.join(parent, "images")
+        if os.path.isdir(candidate) and os.listdir(candidate):
+            return parent
+    return os.path.dirname(model_dir)
 
 
 def main() -> None:
@@ -39,7 +42,9 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--frames", type=int, default=21, help="frames per clip; rounded down to 4k+1")
     parser.add_argument("--splat-radius", type=int, default=2, help="px radius each sparse point is painted over")
+    parser.add_argument("--clip-stride", type=int, default=0, help="window stride between clips (0 = non-overlapping)")
     parser.add_argument("--dataset", default="colmap", help="dataset tag written into the manifest")
+    parser.add_argument("--export-all", action="store_true", help="export every scene in --staging, not just this run's")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
 
@@ -53,7 +58,7 @@ def main() -> None:
 
     staging_scenes = []
     for model_dir in models:
-        name = os.path.basename(os.path.dirname(model_dir)) or os.path.basename(model_dir)
+        name = os.path.basename(resolve_image_root(model_dir).rstrip("/")) or os.path.basename(model_dir)
         name = name.replace(" ", "_")[:48]
         created = scene_to_scannet_tree(
             model_dir, resolve_image_root(model_dir), args.staging, name,
@@ -67,9 +72,15 @@ def main() -> None:
     if not staging_scenes:
         raise SystemExit("nothing staged; check --root and whether images resolve against cameras.txt names")
 
+    scenes = discover_scenes(args.staging) if args.export_all else staging_scenes
     summary = export_manifest(
-        args.staging, args.out, clip_length=1 + 4 * ((args.frames - 1) // 4), clip_stride=args.frames,
-        size=(args.height, args.width), scenes=staging_scenes, dataset=args.dataset,
+        args.staging,
+        args.out,
+        clip_length=1 + 4 * ((args.frames - 1) // 4),
+        clip_stride=args.clip_stride or (1 + 4 * ((args.frames - 1) // 4)),
+        size=(args.height, args.width),
+        scenes=scenes,
+        dataset=args.dataset,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     print("manifest:", json.dumps(manifest_report(load_manifest(summary["manifest"]))))

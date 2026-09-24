@@ -1,0 +1,15 @@
+# Combined pool of everything real on this machine (ScanNet is absent), 128x128, one manifest:
+#   4 ETH3D COLMAP scenes (sparse points3D supervision, 23-67% coverage)
+#   2 object-scale scenes with per-view dense depth maps (100% coverage, exact PINHOLE 256x256 K)
+# Rebuild with:
+#   python tools/prepare_colmap.py --root "<ETH3D root>" --staging data/real_staging --out data/real --height 128 --width 128 --export-all --dataset real_local
+#   python tools/prepare_colmap.py --root BioPhysGS-paper/benchmark_artifacts/converted --staging data/real_staging --out data/real --height 128 --width 128 --export-all --dataset real_local
+manifest: data/real/manifest.jsonl
+root: data/real
+latent_cache: data/real/latents
+datasets: [real_local]
+split: train
+frames: 21                     # clips shorter than this keep their own 4k+1 length
+resolution: [128, 128]
+batch_size: 1                  # scene lengths differ
+vae_backend: wan

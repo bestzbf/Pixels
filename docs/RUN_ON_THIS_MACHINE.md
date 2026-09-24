@@ -92,6 +92,29 @@ COLMAP 文本模型转成 ScanNet 同格式暂存树，再交给已测试的 `ex
 几何项按场景尺度归一（`LossConfig.normalise_point_error`）后训练稳定：
 绝对米制误差会让 40 m 房间与 160 m 广场在同一 batch 里不可比（未归一时 stage3 末步 loss 从 11.5 跳到 34.1）。
 
+### 真实 2000 step×3 阶段结果（ETH3D COLMAP，random init）
+
+| 场景 | 未训练 rel_err | 训练后 rel_err | comp 未训 → 训练后 |
+|---|---|---|---|
+| office | 0.0243 | **0.0238** | 1.257 → **0.924 m** |
+| statue | 0.0479 | **0.0465** | 0.758 → **0.687 m** |
+| pipes | 0.0394 | **0.0389** | 0.639 → **0.510 m** |
+| courtyard | 0.0668 | **0.0549** | 2.661 → **1.876 m** |
+| **均值** | 0.0446 | **0.0410** | 4/4 场景 completeness 全部改善 |
+
+即：**真实数据上确实学到了东西，但幅度小**（相对点误差 -8%，稠密化 20–30%）。原因是可解释的：
+无 4RC 预训练初始化（随机层级）+ 只有 4 个 clip + 稀疏 `points3D` 监督（覆盖率 23–67%）。
+
+### 更好的真实监督：本机另外 2 个稠密深度场景
+
+`BioPhysGS-paper/benchmark_artifacts/converted/{colmap,pancakes}`：32 视角、**逐视图稠密深度 PNG（毫米）**、
+`PINHOLE 256×256, f=221.70`。接入层因此新增：优先使用盘上深度图（`_find_depth`/`_depth_to_millimetres`，
+支持 uint16 毫米与 float 米两种约定）、深度 NEAREST 重采样、以及 NeRF 风格改名场景的
+**按位序回退匹配**（poses 说 `frame_000.png` 而盘上是 `000_color.png`）。稠密场景覆盖率实测 **100%**。
+
+合并真实池 = 4 个 ETH3D（稀疏）+ 2 个稠密物体场景 = 6 clips，`configs/data/real.yaml`；
+DINOv2 初始化 + 该池的 2000 step×3 训练与对照评测已排队执行。
+
 `tools/eval_recon.py` 在真实 clip 上给出相对点误差 / Acc / Comp 与 PLY 导出。实测：
 **随机初始化基线 0.0446 vs 训练 300 step×3 阶段 0.0444**（几乎无差），但 3/4 场景 completeness 变好
 （office 1.257→1.000 m、pipes 0.639→0.503 m）。结论要直说：**没有 4RC 预训练初始化、只有 4 个 clip 时，

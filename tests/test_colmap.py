@@ -104,6 +104,31 @@ def test_staging_then_scannet_reader_round_trip():
     assert 1.9 <= depth[depth > 0].min() <= 4.1  # the cloud sits 2-4 m in front of the camera
 
 
+def test_dense_depth_maps_beat_points3D_splatting():
+    """Converted NeRF-style scenes name frames differently; the on-disk depth must still be used."""
+    import cv2
+
+    model_dir = write_model(ROOT)
+    scene_root = os.path.dirname(os.path.dirname(model_dir))          # .../converted-style root
+    depth_dir = os.path.join(scene_root, "depths")
+    os.makedirs(depth_dir, exist_ok=True)
+    for view in range(5):
+        dense = np.full((240, 320), 2500 + 100 * view, dtype=np.uint16)   # millimetres, renamed frames
+        cv2.imwrite(os.path.join(depth_dir, f"{view:03d}_depth.png"), dense)
+    staged = scene_to_scannet_tree(
+        model_dir, os.path.join(ROOT, "images"), os.path.join(ROOT, "staged2"), "dense",
+        size=(120, 160), max_frames=9, splat_radius=1,
+    )
+    assert staged is not None
+    import glob as glob_module
+
+    files = sorted(glob_module.glob(os.path.join(staged, "*-depth.png")))
+    assert len(files) == 5
+    values = cv2.imread(files[1], cv2.IMREAD_UNCHANGED)
+    assert float((values > 0).mean()) == 1.0                            # every pixel supervised
+    assert abs(int(values[60, 80]) - 2600) < 50                         # the renamed dense map, not a splat
+
+
 def test_model_discovery_finds_the_scene():
     write_model(ROOT)
     assert find_model_dirs(ROOT) == [os.path.join(ROOT, "sparse", "0")]
