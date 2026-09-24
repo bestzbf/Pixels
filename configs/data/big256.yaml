@@ -1,0 +1,19 @@
+# Biggest real pool obtainable on this machine while ScanNet is unmounted: 192x256 (the resolution the
+# model is specified at), overlapping 21- and 13-frame windows cut from every frame the sources provide:
+#   4 ETH3D COLMAP scenes  (courtyard 37, office 25, pipes 13, statue 9 frames; sparse points3D, 23-68% cover)
+#   2 object-scale scenes  (colmap / pancakes, 29 frames each, per-view dense depth, 100% cover)
+# `pancakes` is the same capture as `colmap`, so tools/check_dataset.py drops one of them as a duplicate:
+# windows are scene-correlated by construction (sliding), which this config does not hide.
+# Rebuild with:
+#   python tools/prepare_colmap.py --root "<ETH3D root>" --staging data/big_staging --out data/big --height 192 --width 256 --frames 64
+#   python tools/prepare_colmap.py --root .../benchmark_artifacts/converted --staging data/big_staging --out data/big --height 192 --width 256 --frames 64
+#   then l4d.data.scannet.export_manifest("data/big_staging", ..., clip_length=21, clip_stride=6) and (13, 4), concatenated
+manifest: data/bigpool/manifest.jsonl
+root: data/bigpool
+latent_cache: data/bigpool/latents
+datasets: [big21, big13]
+split: train
+frames: 21
+resolution: [192, 256]
+batch_size: 1
+vae_backend: wan

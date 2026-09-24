@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import sys
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -71,6 +72,8 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.05, help="max tolerated relative cross-view error")
     parser.add_argument("--ascent", action="store_true", help="also report the best depth scale per clip")
     parser.add_argument("--json", default=None)
+    parser.add_argument("--emit-manifest", default=None,
+                        help="write the clips that pass QC to this manifest, de-colliding ids across datasets")
     args = parser.parse_args()
 
     sys.path.insert(0, os.getcwd())
@@ -110,7 +113,8 @@ def main() -> None:
         seen.setdefault(code, record.clip_id)
         verdict = "drop" if (not np.isfinite(relative) or relative > args.threshold or duplicate_of) else "keep"
         row = {
-            "clip": record.clip_id, "frames": int(points.shape[0]), "depth_coverage": round(float(mask.mean()), 4),
+            "clip": record.clip_id, "dataset": record.dataset,
+            "frames": int(points.shape[0]), "depth_coverage": round(float(mask.mean()), 4),
             "cross_view_m": None if not np.isfinite(absolute) else round(absolute, 4),
             "cross_view_rel": None if not np.isfinite(relative) else round(relative, 5),
             "best_depth_scale": best_scale, "best_rel": round(best_relative, 5),
@@ -122,6 +126,21 @@ def main() -> None:
 
     kept = [row for row in report if row["verdict"] == "keep"]
     print(f"\n{len(kept)}/{len(report)} clips pass rel<={args.threshold} and are unique")
+    if args.emit_manifest:
+        # a clip_id is scene+start, so two window lengths over one scene collide; the latent cache keys on it,
+        # so the collision has to be broken here rather than silently sharing a cached latent between clips.
+        surviving = {(row["dataset"], row["clip"]) for row in kept}
+        rows = [json.loads(line) for line in open(cfg["manifest"], encoding="utf-8") if line.strip()]
+        kept_rows = [row for row in rows if (row.get("dataset"), row["clip_id"]) in surviving]
+        collisions = Counter(row["clip_id"] for row in kept_rows)
+        for row in kept_rows:
+            if collisions[row["clip_id"]] > 1:
+                row["clip_id"] = f"{row['clip_id']}__{row.get('dataset', 'clip')}"
+        os.makedirs(os.path.dirname(args.emit_manifest) or ".", exist_ok=True)
+        with open(args.emit_manifest, "w", encoding="utf-8") as fh:
+            for row in kept_rows:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"wrote {len(kept_rows)} QC-passing clips to {args.emit_manifest}")
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump({"threshold": args.threshold, "rows": report, "kept": [row["clip"] for row in kept]}, fh, indent=2)
