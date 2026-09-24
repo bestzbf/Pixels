@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Offline end-to-end verification: no weights, no downloads, CPU only.
 set -euo pipefail
+export PYTHONUNBUFFERED=1   # keep piped logs live instead of flushing only per 4 KB
 cd "$(dirname "$0")/.."
 DEV=${1:-cpu}
 echo "=== 1/5 structure + math checks ==="; python3 tests/test_reproduction.py

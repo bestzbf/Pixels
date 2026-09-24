@@ -7,6 +7,7 @@
 # -> reconstruction metrics against the untrained baseline. Every stage is idempotent and resumable.
 # The same chain is exercised offline by the ScanNet-format fixture in tests/test_scannet.py.
 set -euo pipefail
+export PYTHONUNBUFFERED=1   # keep piped logs live instead of flushing only per 4 KB
 cd "$(dirname "$0")/.."
 
 ROOT=${1:?usage: train_on_scannet.sh <scannet-root> [clips]}

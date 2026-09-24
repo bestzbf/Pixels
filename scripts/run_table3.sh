@@ -8,6 +8,7 @@
 # convolution, frame-wise attention, global attention). Each variant gets its own training run, since
 # evaluating untrained variants would produce a table that looks comparable but proves nothing.
 set -euo pipefail
+export PYTHONUNBUFFERED=1   # keep piped logs live instead of flushing only per 4 KB
 cd "$(dirname "$0")/.."
 
 DATA=${1:-configs/data/real.yaml}

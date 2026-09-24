@@ -4,6 +4,8 @@
 方法：**Latent-to-4D**（核心网络 **L4AR** = Latent-to-4D Alignment and Refinement）。
 项目页：<https://hayd-zju.github.io/Beyond-Pixels/>
 
+见 [`RESULTS.md`](RESULTS.md)：**本机实测数字台账**（权重校验、GPU 诊断、数据 QC、学习效应对照、Table 1/3 状态与 reproduce 命令）。
+
 论文原文不随本仓库分发（版权），用 `bash scripts/fetch_paper.sh` 拉取 arXiv v1（9 页，**不含附录**）并生成本地文本抽取
 `paper_main_text.txt` / `paper_html_text.txt`（均在 `.gitignore` 中）。分析结论已全部写入 `docs/PAPER_ANALYSIS.md`。
 论文逐条分析见 [`docs/PAPER_ANALYSIS.md`](docs/PAPER_ANALYSIS.md)，复现计划见 [`docs/REPRODUCTION_PLAN.md`](docs/REPRODUCTION_PLAN.md)。
