@@ -149,6 +149,20 @@ table lacked: same architecture, same pretrained init, trained tensors *not* loa
 | DINOv2 init, 768 d/12 blocks (2000×3) | **0.0401** | 0.0449 | **−10.7 %** |
 | 4RC init + `cam_dec` head, paper scale 918 M (1500×3) | 0.0433 | 0.0449 | −3.6 % |
 | same, via the ScanNet loader, 1000×3, pool incl. the duplicate clip | 0.0450 | 0.0448 | +0.4 % - no effect |
+| same, 23-clip pool @192×256, 1500×3, **paired clip-by-clip** | 0.1210 | 0.1223 | **−1.0 %, and −0.1 % on the 16 ETH3D windows** |
+
+The last row retracts most of the third's optimistic reading. Comparing the two evaluations clip by clip
+(instead of each run's own "usable" subset, which differ: 19 clips vs 16, which is what made the headline
+means 0.0828 and 0.0458 look incomparable) the trained model improves on 17 of 23 clips but by
+|Δ| ≤ 0.0005 on every ETH3D window - office 0.0242 vs 0.0242, courtyard_000000 0.0662 vs 0.0666 - and the
+only unambiguous movement is an inlier fraction on one office window (20.9 % → 27.6 %). **So the −3.6 %
+measured on the 5-clip pool does not survive a larger pool: it was that pool's idiosyncrasy, not a training
+effect.** The single row that still clears the noise floor is the 768 d / 2000-step run at −10.7 %, and even
+that has only been measured on 4 clips.
+
+That is the argument for the full-corpus run (`scripts/train_on_benchmarks.sh`, §5.3): if the geometry
+pathway learns anything at all, it has to show up at a few hundred clips, and it is the same paired
+trained-vs-init-only protocol so a null result stays a null result.
 
 Per-clip `rel_err` (control → trained) and the inlier/Completeness movement behind the means:
 
@@ -295,6 +309,37 @@ while hf-mirror.com (~2.3 MB/s) and cvlibs.net do - GitHub and `raw.githubuserco
 loader files I looked for there simply were not at the paths I guessed), but they carry no re-hosting of these
 datasets. Everything queued therefore runs through `scripts/fetch_benchmarks.sh`-style resumable, retrying
 pulls, one at a time, because 2.3 MB/s is the whole budget and three concurrent pulls would triple every ETA.
+
+### 5.3 Going for the full corpus: what "全量" costs on this link, and what was verified first
+
+Supply is the binding constraint, measured rather than assumed: hf-mirror.com serves ~2.3 MB/s, which is
+~200 GB/day shared across everything queued, while the **official** dataset hosts are effectively throttled
+from this machine - Princeton answered at **12.6 KB/s** (their 6.885 GB `SUNRGBD.zip` would take 6.4 days),
+and `huggingface.co` plus the Cornell 7-Scenes mirror do not answer at all.
+
+So "a complete dataset for training" is taken from the mirror, but each candidate was verified by *content*
+before committing hours of bandwidth, using ranged reads:
+
+* **7-Scenes full release** - 4 × 5 GiB `tar.zst` parts, 20.7 GB, 129,049 files: **complete and queued**.
+  Together with full NRGBD (7.25 GB, complete) this is ~7 scenes × 6 sequences + 9 scenes of real RGB-D
+  video with shipped poses and dense per-frame depth - the first genuinely large training corpus here.
+* `Pointcept/arkitscenes-compressed` (66.8 GB) - **rejected by inspecting the archive, not the name.** A
+  4 MB ranged read of `arkitscenes_1.tar.gz` lists `Training/<scene>/color.npy|coord.npy|normal.npy`:
+  offline renders of the 3D scans, not capture video. Nine hours of bandwidth for data that cannot be
+  clipped. Hypersim's part-0 range read failed outright, so it stays a reserve rather than a gamble.
+* `ZHAO11564/SUNRGBD.zip` (6.885 GB) - **verified byte-identical to the official file** (identical
+  `Content-Length`, and the first 64 KiB hash to the same `fe46b3eb…` as the bytes Princeton serves) but
+  **not suitable**: `SUNRGBD/kv1/NYUdata/NYU1235/depth_bfx/` holds one PNG per folder, i.e. sparse room
+  views rather than sequences, so 21-frame clips are not available; and the per-image camera poses live in
+  the 570 MB toolbox, which is on the throttled host only (~12 h) and on no mirror. Depth without pose is
+  not trainable here.
+
+`scripts/train_on_benchmarks.sh` is what runs when the two complete archives land: convert → stage every
+sequence (capped by `FRAMES`, default 128, because GT point maps cost ~60 MB per clip) → overlapping 21/13
+windows → the dataset's **own** Train/Test split, resolved by counting digits in `TrainSplit.txt` /
+`TestSplit.txt` and validated against `stairs` (derives 44 train / 22 test, sequences 1 and 4 held out,
+exactly the manual tagging) → QC gate → frozen-VAE latents → paper-scale staged training → held-out scoring
+in cm with the init-only control. GPU stages wait on each other: stage 3 peaks at 23.8 GB of a 24 GB card.
 
 ## 6. Generation metrics (Table 1 pipeline)
 
