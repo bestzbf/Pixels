@@ -1,0 +1,13 @@
+# 7-Scenes (Shotton et al.), the paper's own Table 3 benchmark - stairs, 6 sequences x 500 frames.
+# Staged from the flat DenseFusion layout by tools/prepare_benchmark.py (depth stored in millimetres,
+# a factor measured by triangulating SIFT matches against the shipped poses, not assumed), then
+# resampled 640x480 -> 256x192 (same 4:3 aspect) so the 918M model fits this card.
+manifest: data/sevpool/manifest.jsonl
+root: data/sevpool
+latent_cache: data/sevpool/latents
+datasets: [sev21, sev13]
+split: train
+frames: 21
+resolution: [192, 256]
+batch_size: 1
+vae_backend: wan

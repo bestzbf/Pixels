@@ -241,6 +241,39 @@ with, and the previously mislabelled `Full` row - the one run that *did* carry a
 random weights - now evaluates with zero mismatches, which is what proves the rebuild is the same network.
 The paper rows stay printed by the script as reference only.
 
+### 5.1 The paper's own benchmark is now on this machine: 7-Scenes
+
+ScanNet is gated, so it cannot be fetched from here; the two datasets Table 3 is actually measured on are not.
+`scripts/fetch_benchmarks.sh` pulls them through hf-mirror.com (huggingface.co itself is unreachable from this
+box) with resume-and-retry, and 7-Scenes has landed: **`stairs`, 6 sequences × 500 frames, 2.9 GB** at
+`/mnt/data/pixels-benchmarks/7scenes`, with `neural_rgbd_data.zip` (7.25 GB) and the remaining six scenes
+(20.7 GB, four `tar.zst` parts) still downloading behind it. Both are non-gated research releases; the
+community mirror is the source, so a re-download should re-verify sizes against the repo's manifest.
+
+`tools/prepare_benchmark.py` converts the flat DenseFusion layout (`frame-NNNNNN.{color,depth}.png`,
+`.pose.txt`) into the COLMAP text model + uint16-millimetre depth maps that `l4d/data/colmap.py` already
+prefers, so staging, clip export, QC and the manifest are the same tested code as every other scene here.
+Nothing about the ingestion is assumed:
+
+* **depth scale, measured not guessed.** The canonical Shotton reader divides by 5000, but that would put the
+  median depth of an indoor walkthrough at 0.32 m. Triangulating SIFT matches between frame pairs against the
+  shipped poses gives `triangulated / (raw/5000) = 4.6-5.6` across every pair tried, i.e. a factor of 5: these
+  PNGs store **millimetres**. `tools/check_dataset.py --ascent` then agrees independently - `best_depth_scale`
+  is 1.0 for 64 of 66 clips, meaning the stored metric depth is consistent with the camera geometry as
+  delivered. (A few pairs sit at 2.0; those are near-degenerate windows, not a scale disagreement.)
+* **uint16 saturation is a sensor sentinel, not geometry**: pixels at 65535 (13.11 m under /5000) are dropped;
+  keeping them is what made the scene look 100 m across and made every scale test inconclusive.
+* **the benchmark's own split is honoured**: `TrainSplit.txt`/`TestSplit.txt` are parsed, so sequences 1 and 4
+  (22 clips) are held out and never trained on (`configs/data/seven_test.yaml`).
+* standard 7-Scenes intrinsics (fx=fy=585, cx=320.5, cy=240.5 on 640×480) are used; the ±10 % scatter in the
+  triangulation ratios says absolute cm figures carry roughly that much uncertainty.
+
+Result of the gate: **66/66 clips pass**, depth coverage 85-93 %, cross-view consistency 0.0013-0.0023 of
+scene extent - better-supervised than anything in the local pool. Training runs at 256×192 (the same 4:3
+aspect, since 640×480 does not fit this card at 918 M parameters) and the queued job
+(`runs/seven`, then `tools/eval_gt.py --benchmark 7scenes`) reports Acc/Comp in **cm** and NC next to the
+paper's reference row, which is the first comparison here in the paper's own units.
+
 ## 6. Generation metrics (Table 1 pipeline)
 
 With the local DINOv2-base and CLIP-ViT-L/14 as real encoders, two off-axis views per case
