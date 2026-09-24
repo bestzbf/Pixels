@@ -33,14 +33,19 @@ DATA=configs/data/benchmarks.local.yaml
 TESTDATA=configs/data/benchmarks_test.local.yaml
 OUT=${OUT:-runs/benchmarks}
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
-GPU_FREE=1
-wait_gpu() {  # stage 3 at paper scale peaks at 23.8 GB of this 24 GB card, so GPU stages never overlap
-  while pgrep -f "tools/(train|precompute_latents|eval_recon|eval_gt)\.py" > /dev/null; do
-    if [ "$GPU_FREE" = 1 ]; then GPU_FREE=0; log "GPU busy, waiting: $*"; fi
-    sleep 120
-  done
-  GPU_FREE=1
+# One GPU, and stage 3 at paper scale peaks at 23.8 GB of a 24 GB card: two chains that poll for each other
+# with pgrep can still start in the same second and both die of OOM, so GPU work is claimed through a lock
+# instead of inferred from a process list.
+GPULOCK=${GPULOCK:-/tmp/pixels_gpu.lock}
+exec 9>"$GPULOCK"
+gpu() {  # gpu <args...> - run one GPU-stage command with exclusive access to the card
+  log "claiming the GPU lock"
+  flock -w "${GPU_TIMEOUT:-21600}" 9 || { log "GPU lock timed out"; return 1; }
+  "$@"; local rc=$?
+  log "released the GPU lock (rc=$rc)"
+  return $rc
 }
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
 if [ "${SKIP_WAIT:-0}" != 1 ]; then
   # the single stairs scene and the full release share a parent directory, so "7scenes exists" is not the
@@ -123,18 +128,16 @@ $PY tools/check_dataset.py --data "$DATA" --threshold 0.05 --emit-manifest "$POO
 log "pool after QC: $(wc -l < "$POOL/manifest.jsonl") clips"
 
 log "latent cache"
-wait_gpu "the queued training runs"
-$PY tools/precompute_latents.py --data "$DATA" --model "$MODEL" --device cuda || log "encoding on the fly instead"
+gpu $PY tools/precompute_latents.py --data "$DATA" --model "$MODEL" --device cuda || log "encoding on the fly instead"
 
 log "training: paper scale, 3 stages x $STEPS steps"
-$PY tools/train.py --model "$MODEL" --data "$DATA" --device cuda --steps "$STEPS" --output "$OUT"
+gpu $PY tools/train.py --model "$MODEL" --data "$DATA" --device cuda --steps "$STEPS" --output "$OUT"
 
 log "held-out scoring, in the paper's units"
-wait_gpu "the staged training"
-$PY tools/eval_gt.py --model "$MODEL" --data "$TESTDATA" --benchmark 7scenes --device cuda \
+gpu $PY tools/eval_gt.py --model "$MODEL" --data "$TESTDATA" --benchmark 7scenes --device cuda \
   --variants Full --checkpoint "$OUT/stage3_lora.pt" --out "$OUT/table3_trained.json"
-$PY tools/eval_gt.py --model "$MODEL" --data "$TESTDATA" --benchmark 7scenes --device cuda \
+gpu $PY tools/eval_gt.py --model "$MODEL" --data "$TESTDATA" --benchmark 7scenes --device cuda \
   --variants Full --out "$OUT/table3_control.json"
-$PY tools/eval_recon.py --model "$MODEL" --data "$TESTDATA" --device cuda \
+gpu $PY tools/eval_recon.py --model "$MODEL" --data "$TESTDATA" --device cuda \
   --checkpoint "$OUT/stage3_lora.pt" --out "$OUT/clouds_test"
 log "BENCHMARK_TRAINING_DONE"
