@@ -90,7 +90,9 @@ The two ingestion routes agree where it matters: `tools/check_dataset.py --data 
 reports the same depth coverages (colmap 100 %, courtyard 69.9 %, statue 70.9 %, pipes 31.5 %, office 25.7 %)
 and the same consecutive-view consistency (0.07-2.1 % of extent) as the manifest route above, and it
 independently re-flags `pancakes` as a duplicate of `colmap` (fingerprint distance 0.0045, same as colmap's
-own). So the ScanNet loader is not a second, separately-guessed reading of the data.
+own). So the ScanNet loader is not a second, separately-guessed reading of the data. The chain ran through
+to `[5/5]` (`runs/scannet_chain/stage{1,2,3}*.pt`, 1000 steps/stage); note that it trains on the pool as
+exported, duplicate clip included, since QC is a separate step - its paired evaluation is the third row of §4.
 
 Real pools used instead, after `tools/check_dataset.py` gating (consecutive-view NN / scene extent ≤5%, scale
 -normalised duplicate fingerprint, depth-scale scan):
@@ -115,6 +117,7 @@ table lacked: same architecture, same pretrained init, trained tensors *not* loa
 |---|---|---|---|
 | DINOv2 init, 768 d/12 blocks (2000×3) | **0.0401** | 0.0449 | **−10.7 %** |
 | 4RC init + `cam_dec` head, paper scale 918 M (1500×3) | 0.0433 | 0.0449 | −3.6 % |
+| same, via the ScanNet loader, 1000×3, pool incl. the duplicate clip | 0.0450 | 0.0448 | +0.4 % - no effect |
 
 Per-clip `rel_err` (control → trained) and the inlier/Completeness movement behind the means:
 
@@ -128,6 +131,12 @@ Per-clip `rel_err` (control → trained) and the inlier/Completeness movement be
 
 Reading, without spin:
 
+* **The noise floor is set by the pool, not the metric.** The same architecture and init measured −3.6 %
+  after 1500 steps/stage on the 5-clip pool and +0.4 % after 1000 steps/stage on the 6-clip one, so on data
+  this small anything under roughly 4 % is not resolvable. Only the 768 d / 2000-step result (−10.7 %)
+  clears that bar; treat the two paper-scale rows as "at best a marginal gain here", not as reproductions of
+  the paper's improvement. This is a data-budget limit, and it is the concrete reason the ScanNet pool
+  matters: 1,143 clips is three orders of magnitude more than 6.
 * The gain is concentrated in the hard clips. `office` sits at ~0.0243 in *every* configuration - a floor for
   this pool, not progress - while courtyard moves −24 % (768 d) and −9 % (paper scale) and statue −7 % (768 d).
 * The 1.7× smaller DINOv2-init model gains more than the 918 M one at a comparable budget. With 5 clips and
