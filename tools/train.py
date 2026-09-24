@@ -123,6 +123,36 @@ def build_dataloader(data_cfg: dict) -> DataLoader:
     return DataLoader(dataset, batch_size=int(data_cfg.get("batch_size", 2)), shuffle=True, collate_fn=collate_clips)
 
 
+def build_scheduler(optimizer, stage: dict, steps: int) -> tuple:
+    """Warmup + decay for the budget that is actually running, not the one the config was written against.
+
+    `warmup_steps: 1000` is sized for the paper's 20k-40k stage budgets. When `--steps` shrinks a stage to a
+    few hundred, a fixed warmup swallows the whole run and the learning rate never reaches its target, so
+    warmup is capped at 5 % of the real budget. The stage config advertises a cosine schedule; before this it
+    was parsed and then ignored, which is why a converged-looking loss could still climb through a stage.
+    """
+    import math
+
+    kind = str(stage.get("lr_scheduler", "none") or "none")
+    warmup = int(stage.get("warmup_steps", 0) or 0)
+    if warmup:
+        warmup = max(1, min(warmup, max(10, int(0.05 * steps))))
+    if kind == "none" or steps <= 1:
+        return None, warmup
+
+    def factor(current: int) -> float:
+        if warmup and current < warmup:
+            return max(current, 1) / warmup
+        if kind == "cosine":
+            progress = (current - warmup) / max(1, steps - warmup)
+            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, progress))))
+        return 1.0
+
+    from torch.optim.lr_scheduler import LambdaLR
+
+    return LambdaLR(optimizer, factor), warmup
+
+
 def run_stage(model: L4AR, stage: dict, data_cfg: dict, train_cfg: dict, device: str, log_dir: str) -> str:
     activate = {"alignment": 1, "decoder_heads": 2, "refinement_lora": 3}
     stage_index = max(activate[name] for name in stage["activate"])
@@ -142,6 +172,9 @@ def run_stage(model: L4AR, stage: dict, data_cfg: dict, train_cfg: dict, device:
     )
     steps = int(stage.get("steps", 3))
     clip = float(stage.get("gradient_clip", 0) or 0)
+    scheduler, warmup = build_scheduler(optimizer, stage, steps)
+    print(f"[{stage['name']}] schedule: {stage.get('lr_scheduler', 'none')} over {steps} steps, warmup {warmup}",
+          flush=True)
     model.train()
     iterator = iter(loader)
     started = time.time()
@@ -157,8 +190,12 @@ def run_stage(model: L4AR, stage: dict, data_cfg: dict, train_cfg: dict, device:
         if clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
         if step % int(train_cfg.get("log_every", 1)) == 0 or step == steps:
-            print(f"[{stage['name']}] step {step}/{steps} loss={losses['loss'].item():.4f} {summarize(losses)}", flush=True)
+            lr = optimizer.param_groups[0]["lr"]
+            print(f"[{stage['name']}] step {step}/{steps} lr={lr:.3e} loss={losses['loss'].item():.4f} "
+                  f"{summarize(losses)}", flush=True)
     from l4d.utils.checkpoint import save_checkpoint
 
     checkpoint = os.path.join(log_dir, f"{stage['name']}.pt")

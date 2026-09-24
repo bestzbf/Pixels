@@ -533,5 +533,42 @@ def test_checkpoint_load_reports_tensors_the_model_dropped(tmp_path: str = "/tmp
     assert report.get("dropped_tensors"), report
 
 
+def test_declared_lr_schedule_is_applied_and_warmup_scales_with_the_budget():
+    """`lr_scheduler: cosine` in the stage config used to be parsed and then ignored.
+
+    Worse, `warmup_steps: 1000` is written for the paper's 20k-step stages: with `--steps 1500` it swallows
+    two thirds of the run, and at `--steps 800` the learning rate never reaches its target at all - which is
+    indistinguishable from "training did not work" unless the schedule is actually observable.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("train_tool", "tools/train.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.build_scheduler(torch.optim.SGD([torch.zeros(1, requires_grad=True)], lr=1e-4),
+                                  {"lr_scheduler": "none"}, 500)[0] is None
+
+    parameters = [torch.zeros(1, requires_grad=True)]
+    optimizer = torch.optim.SGD(parameters, lr=1e-4)
+    stage = {"lr_scheduler": "cosine", "warmup_steps": 1000}
+    scheduler, warmup = module.build_scheduler(optimizer, stage, 1500)
+    assert scheduler is not None and warmup == 75, warmup        # capped at 5 % of the real budget
+
+    curve = []
+    for _ in range(1500):
+        optimizer.step()
+        scheduler.step()
+        curve.append(optimizer.param_groups[0]["lr"])
+    assert curve[0] < curve[warmup], "warmup must ramp the rate up"
+    peak = max(curve)
+    assert abs(curve[warmup] / peak - 1.0) < 0.05
+    assert curve[-1] < 0.01 * peak, f"cosine should decay to ~0, ended at {curve[-1]:.2e}"
+    assert curve[750] < peak                                     # and be mid-decay by mid-run
+
+    _, short_warmup = module.build_scheduler(optimizer, stage, 200)
+    assert short_warmup <= 10, short_warmup                      # a 200-step stage cannot burn 1000 warming up
+
+
 if __name__ == "__main__":
     main()
