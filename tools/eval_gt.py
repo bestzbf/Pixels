@@ -29,10 +29,12 @@ from l4d.utils.config import load_config
 BENCHMARKS = {B.name: B for B in (SEVEN_SCENES, NRGBD)}
 
 
-def build_variant(model_cfg: dict, variant: str, device: str, checkpoint: str | None):
+def build_variant(model_cfg: dict, variant: str, device: str, checkpoint: str | None, seed: int = 0):
     cfg = copy.deepcopy(model_cfg["model"])
     for key, value in TABLE_3_VARIANTS[variant].items():
         cfg[key] = value
+    # a randomly initialised backbone is only reproducible through the seed that drew it
+    torch.manual_seed(seed)
     model = build_l4ar(L4ARConfig.from_dict(cfg)).to(device)
     # same contract as tools/eval_recon.py: rebuild the frozen backbone training saw before restoring heads
     apply_pretrained_init(model, model_cfg.get("pretrained_init", {}))
@@ -85,6 +87,8 @@ def main() -> None:
     parser.add_argument("--threshold-cm", type=float, default=5.0)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out", default=None)
+    parser.add_argument("--seed", type=int, default=0,
+                        help="must match the training seed: a randomly initialised backbone is only reproducible through it")
     args = parser.parse_args()
 
     model_cfg = load_config(args.model).to_dict()
@@ -104,7 +108,7 @@ def main() -> None:
     benchmark = BENCHMARKS.get(args.benchmark) or GTBenchmark(args.benchmark, sequences=len(dataset))
     rows = {}
     for variant in args.variants:
-        model = build_variant(model_cfg, variant, args.device, args.checkpoint)
+        model = build_variant(model_cfg, variant, args.device, args.checkpoint, args.seed)
         metrics = evaluate_variant(model, vae, dataset, benchmark, args.device, args.threshold_cm)
         rows[variant] = metrics
         reference = TABLE_3_REFERENCE.get(variant, {}).get(args.benchmark)

@@ -163,7 +163,8 @@ def run_stage(model: L4AR, stage: dict, data_cfg: dict, train_cfg: dict, device:
 
     checkpoint = os.path.join(log_dir, f"{stage['name']}.pt")
     info = save_checkpoint(checkpoint, model, train_cfg["model_cfg"], stage,
-                           full=train_cfg.get("save_full", False), init_source=train_cfg.get("init_source", "random"))
+                           full=train_cfg.get("save_full", False), init_source=train_cfg.get("init_source", "random"),
+                           seed=int(train_cfg.get("seed", 0)))
     print(f"[{stage['name']}] saved {checkpoint} in {time.time() - started:.1f}s "
           f"({info['kind']}: {info['tensors']} tensors, {info['mb']} MB)", flush=True)
     return checkpoint

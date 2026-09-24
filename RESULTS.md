@@ -129,17 +129,39 @@ config frozen inside every checkpoint makes the architecture at *load time* audi
 `tools/train.py` now also stamps the effective `--data` path into each stage record (it used to inherit the
 plan's `configs/data/clips_final.yaml`, which is not what ran).
 
-⏳ running: **chain6** = per-variant Table 3 training on the same pool (`runs/table3_real`, 512 d/12 blocks,
-800 steps × 3 stages per variant, `w_o_Global` last). chain5 (paper scale, 4RC backbone + `cam_dec` head) is
-the second row of the table above; its checkpoints are `runs/gpu_real_4rc_camdec/stage{1,2,3}*.pt` and its
-re-verified evaluation is `runs/gpu_real_4rc_camdec/clouds_checked/`.
+chain5 (paper scale, 4RC backbone + `cam_dec` head) is the second row of the table above; its checkpoints
+are `runs/gpu_real_4rc_camdec/stage{1,2,3}*.pt` and its re-verified evaluation is
+`runs/gpu_real_4rc_camdec/clouds_checked/`. chain6 (per-variant Table 3) is in §5, with a negative result.
 
 ## 5. Table 3 (component ablation) status
 
-`tools/eval_gt.py` now accepts a real pool, and `scripts/run_table3.sh` **trains each variant separately**
-before scoring it. An earlier attempt that scored untrained variants produced Acc = 3.1–3.5 for all five
-variants — a table with no discriminating power; it is deliberately not reported as a result.
-Paper rows (7-Scenes/NRGBD, cm) stay printed as reference only.
+`tools/eval_gt.py` accepts a real pool, and `scripts/run_table3.sh` **trains each variant separately** before
+scoring it (`runs/table3_real/`, 512 d/12 blocks, 800 steps × 3 stages, same 5-clip pool, same seed). Result:
+
+| variant | Acc | Comp | NC | paper 7-Scenes Acc/Comp/NC |
+|---|---|---|---|---|
+| Full | 3.455 | 3.446 | 0.050 | 3.121 / 5.418 / 0.628 |
+| w/o Grid | **3.015** | 3.263 | 0.080 | 3.783 / 6.844 / 0.608 |
+| w/o 3D Conv | 3.359 | 3.262 | 0.064 | 6.944 / 15.806 / 0.554 |
+| w/o Frame | 3.485 | 3.496 | 0.091 | 6.688 / 20.806 / 0.513 |
+| w/o Global | 3.529 | 3.705 | 0.049 | 6.754 / 19.742 / 0.559 |
+
+**This does not reproduce the paper's ordering and is reported as a negative result.** The paper's ablations
+degrade sharply (Acc 3.12 → 6.7-6.9, Comp 5.4 → 16-21); here the whole spread is 3.0-3.5 with *w/o Grid*
+best, i.e. the five variants are indistinguishable on this pool. Two honest reasons: 5 clips × 800 steps
+cannot exercise what a 31-block alternating-attention hierarchy needs, and the pool has no paper-comparable
+reference row (its own Acc/Comp scale is scene-relative, not the benchmark's cm on 7-Scenes/NRGBD). The run
+to run noise is not negligible either: the same checkpoints scored 3.433/3.194 for Full/w-o-Grid *before*
+the seed fix below, and 3.455/3.015 after it.
+
+That second measurement is the reason the numbers are trustworthy now. The first chain6 pass evaluated each
+variant against **a different random backbone than it trained on**: `eval_gt.py` never called
+`torch.manual_seed`, and `frozen_fingerprint` is deliberately not stored when `init_source == "random"`
+(random statistics are not pinable), so the guard could not complain. `--seed` (default 0, matching
+`configs/train/staged.yaml`) now seeds each variant's build, `save_checkpoint` records the seed it trained
+with, and the previously mislabelled `Full` row - the one run that *did* carry a 64-tensor fingerprint of
+random weights - now evaluates with zero mismatches, which is what proves the rebuild is the same network.
+The paper rows stay printed by the script as reference only.
 
 ## 6. Generation metrics (Table 1 pipeline)
 
@@ -177,5 +199,7 @@ python tools/check_dataset.py --data configs/data/real.yaml --threshold 0.05 --a
 python tools/train.py --model configs/model/l4ar_paper.yaml --data configs/data/real.yaml --device cuda --steps 1500
 python tools/eval_recon.py --model configs/model/l4ar_paper.yaml --data configs/data/real.yaml \
        --checkpoint runs/.../stage3_lora.pt --from-scratch                            # drop flag for baseline
+python tools/eval_recon.py --model configs/model/l4ar_paper.yaml --data configs/data/real.yaml \
+       --from-scratch                                                                 # control: init only, no trained tensors
 bash scripts/run_table3.sh configs/data/real.yaml runs/table3_real
 ```

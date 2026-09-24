@@ -30,7 +30,7 @@ def frozen_fingerprint(model: torch.nn.Module) -> dict[str, list[float]]:
 
 
 def save_checkpoint(path: str, model: torch.nn.Module, config: dict, stage: dict, full: bool = False,
-                    init_source: str = "random") -> dict:
+                    init_source: str = "random", seed: int | None = None) -> dict:
     state = model.state_dict() if full else trainable_state_dict(model)
     torch.save(
         {
@@ -38,6 +38,8 @@ def save_checkpoint(path: str, model: torch.nn.Module, config: dict, stage: dict
             "model_kind": "full" if full else "trainable-only",
             # Randomly drawn frozen weights make a fingerprint meaningless; only a pretrained init is worth pinning.
             "init_source": init_source,
+            # a random frozen backbone has no pinable statistics, so reproducing an eval needs this seed
+            "seed": seed,
             "frozen_fingerprint": frozen_fingerprint(model) if init_source != "random" else {},
             "config": config,
             "stage": stage,

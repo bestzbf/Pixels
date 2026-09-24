@@ -48,10 +48,13 @@ def main() -> None:
     parser.add_argument("--index", type=int, default=0, help="clip index to dump PLYs for")
     parser.add_argument("--out", default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="must match the training seed: a randomly initialised backbone is only reproducible through it")
     args = parser.parse_args()
 
     model_cfg = load_config(args.model).to_dict()
     data_cfg = load_config(args.data).to_dict()
+    torch.manual_seed(args.seed)
     model = build_initialised_model(model_cfg, args.device)
     if args.checkpoint and not args.from_scratch:
         from l4d.utils.checkpoint import load_checkpoint
