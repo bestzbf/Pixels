@@ -1,0 +1,23 @@
+# Biggest real pool on this machine while ScanNet is unmounted: 192x256, 7 scenes, 38 QC-passing clips.
+#   4 ETH3D COLMAP scenes (courtyard 37, office 25, pipes 13, statue 9 frames; sparse points3D, 21-71% cover)
+#   1 object-scale scene with per-view dense depth (colmap, 29 frames, 100% cover; pancakes deduped away)
+#   1 Agisoft Metashape photogrammetry capture (building, 49 of 50 calibrated frames, 59-75% cover)
+# Overlapping 21- and 13-frame windows are cut from every scene, so windows from one scene are correlated;
+# tools/check_dataset.py drops cross-view outliers, same-capture duplicates and the id collisions that
+# two window lengths over one scene would otherwise create (the latent cache keys on clip_id).
+# Rebuild with:
+#   python tools/prepare_colmap.py --root "<ETH3D root>"     --staging data/big_staging --out data/junk --height 192 --width 256 --frames 64
+#   python tools/prepare_colmap.py --root .../benchmark_artifacts/converted --staging data/big_staging --out data/junk --height 192 --width 256 --frames 64
+#   python tools/prepare_metashape.py --psz <building.psz> --mesh <building.obj> --photos <dir> --out /tmp/ms_building
+#   python tools/prepare_colmap.py --root /tmp/ms_building   --staging data/big_staging --out data/junk --height 192 --width 256 --frames 64
+#   then export_manifest("data/big_staging", ...) at (21, 6) and (13, 4), concatenate, and
+#   python tools/check_dataset.py --data configs/data/pool2.yaml --threshold 0.05 --emit-manifest data/pool2/manifest.jsonl
+manifest: data/pool2/manifest.jsonl
+root: data/pool2
+latent_cache: data/pool2/latents
+datasets: [c21, c13]
+split: train
+frames: 21
+resolution: [192, 256]
+batch_size: 1
+vae_backend: wan

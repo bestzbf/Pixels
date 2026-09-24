@@ -46,7 +46,7 @@ Pixels/
 │   ├── eval/      projection_metrics.py gt_metrics.py residual_probe.py baselines.py protocol.py
 │   └── utils/     geometry.py config.py
 ├── tools/         train.py infer.py eval_generation.py eval_gt.py eval_recon.py residual_sensitivity.py
-│                  precompute_latents.py build_benchmark.py prepare_scannet.py prepare_colmap.py check_dataset.py
+│                  precompute_latents.py build_benchmark.py prepare_scannet.py prepare_colmap.py prepare_metashape.py check_dataset.py
 ├── scripts/       install.sh smoke_test.sh train_all.sh eval_all.sh fetch_weights.sh
 └── tests/         test_reproduction.py   # 21 项结构/数学/协议一致性检查
 ```

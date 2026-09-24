@@ -86,6 +86,37 @@ now takes `POOL`/`HEIGHT`/`WIDTH` and rewrites `root`/`manifest`/`latent_cache`/
 config to match, because an export size and a training size that disagree silently resamples every clip.
 For real ScanNet the defaults (`data/scannet`, 192×256) reproduce the previous behaviour exactly.
 
+### 3.2 Everything else on this machine, and why most of it cannot train L4AR
+
+Prompted by "没有更大的数据集吗", a full size-ranked sweep of `/home/zbf` (356 GB) plus both drives:
+
+| source | frames | calibration | scene geometry | usable for L4AR |
+|---|---|---|---|---|
+| 4 × ETH3D COLMAP (courtyard/office/pipes/statue) | 38/26/14/11 | COLMAP text ✓ | sparse `points3D` | **used** |
+| `benchmark_artifacts/converted/{colmap,pancakes}` | 29 each | PINHOLE 256² ✓ | per-view dense depth, 100 % | **used** (pancakes is the same capture → deduped) |
+| `建筑_Agisoft_Building/building.psz` + `OBJ_export/building.obj` | 50 calibrated cameras (4,368×2,912 Canon, Brown k1-k3) | Metashape `doc.xml` ✓ | 251,049-vertex photogrammetric mesh | **added by this sweep** - see below |
+| `工业建筑_Pix4D_Industrial_Building` (138), `建筑_Pix4D_Building` (36) | 174 | ✗ - the `.p4d` is a Pix4Dmapper XML of options + EXIF times only; poses live in `1_initial/rays_from_image_(meters).txt`, which is not present | ✗ | no, without SfM |
+| `知名建筑_Esri_Trakai_Island_Castle` | 360 × 8192×5,640 aerial | ✗ DJI P1 images with EXIF; the Esri ZIPs that carried the rest were deleted, `Metadata.txt` says "Ground Control: No" | ✗ | no, without SfM |
+| `被替换的错误示例/考古文物_DTU_scan114` | 49 × 1600×1200 | **✓ `cams/*_cam.txt`** (mvsnet/colmap2mvsnet: 4×4 extrinsic + 3×3 intrinsic + near/far) | ✗ no `depth/`, no scan `.ply` | poses yes, supervision no - needs DTU's mesh or pseudo-depth |
+| `考古_TanksAndTemples_Temple连续帧` | 11 | ✗ none found | ✗ | no |
+| `_archives/WoodScape` (772 MB), `BlendedMVS原始场景` (219 MB), `月球_SePT原始轨迹` (2.2 GB) | - | ✗ no yaml/json/mat/ply/txt calibration inside | ✗ | no |
+| `MVS/casREDNet_pytorch-master` (135 GB) | 1,035 images, all OpenCV docs/tests | - | - | **not data**: model checkpoints + a vendored OpenCV; `datasets/` is 384 KB of loader code |
+| `/mnt/data` (916 GB) | - | - | - | only our weights/env (8.3 GB used) |
+| NAS `//192.168.2.233/{e,f}` → `~/16t/{e,f}` | presumably ScanNet | - | - | unreachable, see §3 |
+
+Two things came out of it. **One new trainable scene**: the Agisoft building capture, ingested through
+`l4d/data/metashape.py` + `tools/prepare_metashape.py` (project XML → COLMAP OPENCV model with Brown
+distortion, chunk→world transform applied, mesh vertices as the scene cloud). It is the best-supervised
+real data here: 15/15 windows pass QC at 59-75 % depth coverage with `best_depth_scale = 1.0` (so the
+metric frame is right, which is the check that a chunk/world mix-up would fail), and `cross_view_rel`
+0.0016-0.039. The combined pool is therefore **38 QC-passing clips over 7 scenes at 192×256**
+(`configs/data/pool2.yaml`, was 23), and it is the second queued run's dataset.
+
+**And one standing option**: `~/.cache/huggingface/hub` already holds `depth-anything/DA3Metric-Large` and
+friends, so DTU scan114's 49 exactly-calibrated views *could* be trained on with metric monocular depth -
+but that depth is estimated, not measured, so it would be pseudo-GT and has to be labelled as such wherever
+it appears. Not done here.
+
 The two ingestion routes agree where it matters: `tools/check_dataset.py --data configs/data/scannet.local.yaml`
 reports the same depth coverages (colmap 100 %, courtyard 69.9 %, statue 70.9 %, pipes 31.5 %, office 25.7 %)
 and the same consecutive-view consistency (0.07-2.1 % of extent) as the manifest route above, and it
