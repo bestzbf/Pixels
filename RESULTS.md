@@ -315,11 +315,24 @@ error in any unit convention, and the loss stops paying for confidence with geom
 `tests/test_reproduction.py::test_depth_term_is_scene_scale_free` pins it: the term must be invariant when
 a scene is restated in millimetres, and a zero head must start near 1.0 in both conventions.
 
-The run that follows from both fixes is the paper protocol, on the release's own split: train
-`configs/data/benchmarks.local.yaml` (380 train captures) for 3 stages x 2000 steps into `runs/bench_clean`,
-then score `configs/data/benchmarks_test.local.yaml` (171 held-out captures) with `eval_gt --benchmark
-7scenes` for Acc/Comp/NC beside the paper row, and `eval_recon` for the per-clip pairing against an
-init-only control on the identical clips. Its result goes in §4.4.
+### 4.4 Two runs in flight, and a third protocol bug found while preparing them
+
+DTU had no split at all, so `scripts/train_on_dtu.sh` scored "on the same pool" and said so - but its
+control arm ran `eval_recon --from-scratch`, i.e. a **re-randomised** backbone rather than the 4RC init the
+trained run started from. That comparison measures the init, not the training. Both arms now load the same
+init, differ only by the checkpoint, and read the held-out scans: `configs/data/dtu_heldout_scans.txt`
+holds out `scan1, scan13, scan34, scan75` whole (48 of 226 clips), because a scan's clips share its object,
+its calibrated pose convention and its depth unit - splitting inside a scan would score memory of the
+calibration. `tools/check_dataset.py --holdout-file` applies it and prints the resulting counts, and
+`--emit-manifest`'s relabel runs for every benchmark now.
+
+| run | pool | protocol | artifacts |
+|---|---|---|---|
+| `runs/bench_clean` | 380 train captures | 3 x 2000 steps, then `eval_gt --benchmark 7scenes` + per-clip `eval_recon` pairing on the 171 held-out captures | `/tmp/clean_heldout_{trained,control}.log` |
+| `runs/dtu_clean` | 178 train clips, 4 scans unseen | same, scored on the 48 held-out clips | `/tmp/dtu_heldout_{trained,control}.log` |
+
+Both are serialised on `flock /tmp/pixels_gpu.lock`, so they run back to back on the one card.
+
 
 ## 5. Table 3 (component ablation) status
 

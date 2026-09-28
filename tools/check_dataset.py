@@ -76,6 +76,8 @@ def main() -> None:
                         help="write the clips that pass QC to this manifest, de-colliding ids across datasets")
     parser.add_argument("--split-root", default=None,
                         help="dataset root holding Train/TestSplit.txt; relabels each clip by its own capture")
+    parser.add_argument("--holdout-file", default=None,
+                        help="one scene per line: clips from these scenes become split=test (for releases that ship no split)")
     args = parser.parse_args()
 
     sys.path.insert(0, os.getcwd())
@@ -149,9 +151,21 @@ def main() -> None:
                 key = staging._capture_key("_".join(row["clip_id"].split("_")[:2]))
                 if key:
                     row["split"] = table.get(key, row.get("split", "train"))
-            counts = Counter(row.get("split", "train") for row in kept_rows)
-            # an all-train pool is not a benchmark, it is a leak: training on the held-out set still scores
-            print("splits after relabel:", dict(counts) or "none")
+        if args.holdout_file:
+            # DTU ships no split, so ours has to be whole scans: clips from one scan share its object,
+            # its calibrated pose convention and its depth unit, and holding out frames inside a scan
+            # would score memory of that calibration rather than reconstruction.
+            held = {line.strip() for line in open(args.holdout_file, encoding="utf-8") if line.strip()
+                    and not line.startswith("#")}
+            for row in kept_rows:
+                scene = row["clip_id"].split("_")[0]
+                if scene in held:
+                    row["split"] = "test"
+            missing = held - {row["clip_id"].split("_")[0] for row in kept_rows}
+            if missing:
+                print("holdout scenes with no surviving clip:", sorted(missing))
+        # an all-train pool is not a benchmark, it is a leak: training on the held-out set still scores
+        print("splits after relabel:", dict(Counter(row.get("split", "train") for row in kept_rows)))
         os.makedirs(os.path.dirname(args.emit_manifest) or ".", exist_ok=True)
         with open(args.emit_manifest, "w", encoding="utf-8") as fh:
             for row in kept_rows:

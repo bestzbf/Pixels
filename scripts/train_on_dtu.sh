@@ -12,6 +12,10 @@
 # DTU is a controlled turntable set: 49 views per scan around one static object, metric in millimetres, with
 # a GT mesh (scan.ply) per scan. That is a different regime from ScanNet room scans - useful geometry
 # supervision, but a 21-frame clip is 21 views of one object, so clip counts are bounded by 23 scans.
+#
+# DTU ships no split, so the held-out set is defined here as whole scans (configs/data/dtu_heldout_scans.txt):
+# a scan's clips share its object, its calibrated pose convention and its depth unit, so splitting inside a
+# scan would score memory of the calibration rather than reconstruction of a new scene.
 set -uo pipefail
 export PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 cd "$(dirname "$0")/.."
@@ -27,6 +31,7 @@ PY=${PY:-/home/zbf/Desktop/dl_env/bin/python}
 STAGING=data/dtu_staging
 POOL=data/dtupool
 DATA=configs/data/dtu.local.yaml
+HELDOUT=configs/data/dtu_heldout.local.yaml
 OUT=${OUT:-runs/dtu}
 GPULOCK=${GPULOCK:-/tmp/pixels_gpu.lock}
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
@@ -59,14 +64,21 @@ log "pool before QC: $(wc -l < "$POOL/manifest.jsonl") clips"
 sed -e "s#^manifest:.*#manifest: $POOL/manifest.jsonl#" -e "s#^root:.*#root: $POOL#" \
     -e "s#^latent_cache:.*#latent_cache: $POOL/latents#" -e "s#^datasets:.*#datasets: [dtu21, dtu13]#" \
     configs/data/seven.yaml > "$DATA"
+sed -e "s/^split: train/split: test/" "$DATA" > "$HELDOUT"
 
-gpu $PY tools/check_dataset.py --data "$DATA" --threshold 0.05 --ascent --emit-manifest "$POOL/manifest.jsonl" | tail -6
+gpu $PY tools/check_dataset.py --data "$DATA" --threshold 0.05 --ascent --emit-manifest "$POOL/manifest.jsonl" \
+  --holdout-file configs/data/dtu_heldout_scans.txt | tail -6
 log "pool after QC: $(wc -l < "$POOL/manifest.jsonl") clips"
 gpu $PY tools/precompute_latents.py --data "$DATA" --model "$MODEL" --device cuda || log "encoding on the fly"
 gpu $PY tools/train.py --model "$MODEL" --data "$DATA" --device cuda --steps "$STEPS" --output "$OUT"
 
-log "scoring on the same pool - DTU ships no clip-level split, so this is NOT held-out evaluation"
-log "for a held-out number, hold back whole scans with MIN_SCANS and a second pool; do not read this as test-set accuracy"
+# Both arms must be read on the held-out scans only, and the control has to start from the same 4RC init
+# the trained run did: --from-scratch would compare against a re-randomised backbone and score the init,
+# not the training.
+log "held-out scoring: scans $(tr '\n' ' ' < configs/data/dtu_heldout_scans.txt), never trained on"
+gpu $PY tools/eval_recon.py --model "$MODEL" --data "$HELDOUT" --device cuda \
+  --checkpoint "$OUT/stage3_lora.pt" --out "$OUT/clouds_heldout" > "$OUT/heldout_trained.log" 2>&1
+gpu $PY tools/eval_recon.py --model "$MODEL" --data "$HELDOUT" --device cuda > "$OUT/heldout_control.log" 2>&1
+log "in-pool scoring, kept only as a memorisation reference - this is NOT test-set accuracy"
 gpu $PY tools/eval_recon.py --model "$MODEL" --data "$DATA" --device cuda --checkpoint "$OUT/stage3_lora.pt" --out "$OUT/clouds"
-gpu $PY tools/eval_recon.py --model "$MODEL" --data "$DATA" --device cuda --from-scratch
 log "DTU_TRAINING_DONE"

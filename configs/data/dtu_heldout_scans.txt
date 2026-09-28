@@ -1,0 +1,13 @@
+# DTU holds out whole scans, because DTU ships no split of any kind.
+#
+# The unit of the split has to be the scan: every clip of one scan shares the same object, the same
+# per-scan pose-convention and depth-unit calibration (tools/prepare_benchmark.py::calibrate_dtu_scan)
+# and the same turntable geometry, so holding out frames inside a scan would score memory of that
+# calibration rather than reconstruction from a new scene.
+#
+# Chosen for spread across the 19 scans that survived QC (49, 62 and 77 were staged but did not pass),
+# not for difficulty; ~12 clips each, so 47 of 226 clips (~21 %) are unseen during training.
+scan1
+scan13
+scan34
+scan75
