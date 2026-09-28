@@ -22,6 +22,9 @@ export PYTHONUNBUFFERED=1
 cd "$(dirname "$0")/.."
 
 BENCH=${BENCH:-/mnt/data/pixels-benchmarks}
+# the OpenDataLab repackage nests the scenes two levels deeper than the flat one did
+SEVEN=${SEVEN:-$(find "$BENCH" -maxdepth 5 -type d -name raw 2>/dev/null | head -1)}
+NRGBD_DIR=${NRGBD_DIR:-$(find "$BENCH" -maxdepth 2 -type d -iname "*nrgb*" 2>/dev/null | head -1)}
 FRAMES=${FRAMES:-128}
 STRIDE=${STRIDE:-12}
 STEPS=${STEPS:-2000}
@@ -52,22 +55,33 @@ if [ "${SKIP_WAIT:-0}" != 1 ]; then
   # signal; count the official scene names instead, or this would fire after NRGBD with one scene on disk
   scenes_present() {
     find "$BENCH" -maxdepth 3 -type d 2>/dev/null \
-      | grep -ciE "/(flames|heads|stairs|office|pumpkin|redkitchen|chess|gideon)$"
+      | grep -ciE "/(fire|flames|heads|stairs|office|pumpkin|redkitchen|chess|gideon)$"
   }
   while :; do
     nrgb=$(find "$BENCH" -maxdepth 2 -type d -iname "*nrgb*" 2>/dev/null | head -1)
     count=$(scenes_present)
-    [ -n "$nrgb" ] && [ "$count" -ge 6 ] && break
+    if [ "${INCLUDE_NRGBD:-0}" = 1 ]; then [ -n "$nrgb" ] && [ "$count" -ge 6 ] && break
+    else [ "$count" -ge 6 ] && break; fi
     log "waiting: NRGBD dir='$nrgb', 7-Scenes scenes present=$count/6"
     sleep 300
   done
   log "archives ready: NRGBD=$nrgb, scenes=$count"
 fi
-seven=${seven:-$BENCH/7-scenes}; nrgbd=${nrgb:-$BENCH/nrgbd}
-log "7-Scenes root: $seven"; log "NRGBD root: $nrgbd"
+seven=${seven:-$SEVEN}; nrgbd=${NRGBD_DIR:-}
+log "7-Scenes root: $seven"; log "NRGBD root: ${nrgbd:-none}"
+roots=("$seven")
+if [ "${INCLUDE_NRGBD:-0}" = 1 ]; then
+  roots+=("$nrgbd")
+else
+  # NRGBD as mirrored here is unusable and that was measured, not assumed: poses.txt carries no frame
+  # index and the package ships no trainval_files.txt/test_files.txt, so none of the 16 combinations of
+  # ordering x camera-axis convention x transpose/invert gets wide-baseline agreement below 0.13
+  # (7-Scenes on the same test sits at 0.0013-0.0023). Set INCLUDE_NRGBD=1 if the file lists are added.
+  log "skipping NRGBD: pose-to-image correspondence absent from the package (see comment)"
+fi
 
 mkdir -p "$POOL" "$STAGING"
-for root in "$seven" "$nrgbd"; do
+for root in "${roots[@]}"; do
   log "converting $root"
   $PY tools/prepare_benchmark.py --root "$root" --out /tmp/bench_models \
     || { log "conversion failed for $root"; continue; }

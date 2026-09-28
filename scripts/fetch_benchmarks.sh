@@ -22,6 +22,11 @@ log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
 pull() {  # pull <url> <dest> [expected-bytes]
   local url=$1 out=$2 want=${3:-0}
   [ -s "$out" ] && { [ "$want" = 0 ] || [ "$(stat -c%s "$out")" -ge "$want" ] && { log "have   $(basename "$out")"; return 0; }; }
+  # a resumed .part that already reached the expected size is done: curl -C - would answer 416 to a range
+  # starting at EOF, and treating that as failure would strand a complete download
+  if [ -s "$out.part" ] && { [ "$want" = 0 ] || [ "$(stat -c%s "$out.part")" -ge "$want" ]; }; then
+    mv "$out.part" "$out"; log "resumed complete $(basename "$out") ($(stat -c%s "$out") B)"; return 0
+  fi
   local attempt
   for attempt in $(seq 1 30); do
     if curl -fL -C - --retry 5 --retry-delay 5 --speed-limit 20000 --speed-time 180 -o "$out.part" "$url"; then
@@ -49,11 +54,14 @@ stage_nrgbd() {   # NRGBD (Lin et al.), the paper's second Table 3 column
   find "$DEST/nrgbd" -maxdepth 2 | head -12
 }
 
-stage_seven() {   # all seven scenes, 20.7 GB, delivered as four 5 GiB parts of one tar.zst
-  local part
+stage_seven() {   # all seven scenes, 20.7 GB, as four parts of one tar.zst
+  # the last part is short: 4,582,293,940 B, per the repo tree API. Hard-coding one 5 GiB expectation for
+  # every part made the finished last part look truncated, so it retried forever and never renamed.
+  local part want
   for part in 00 01 02 03; do
+    want=5368709120; [ "$part" = 03 ] && want=4582293940
     pull "$M/datasets/kronecker0122/7-scenes/resolve/main/7-scenes.tar.zst.part-$part" \
-         "$DEST/7-scenes.tar.zst.part-$part" 5368709120 || return 1
+         "$DEST/7-scenes.tar.zst.part-$part" "$want" || return 1
   done
   if [ ! -d "$DEST/7-scenes/heads" ]; then
     log "extracting 7-scenes.tar.zst (~33 GB uncompressed)"

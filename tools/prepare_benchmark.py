@@ -122,17 +122,96 @@ def read_split(root: str) -> dict[str, str]:
     return split
 
 
-def scan_dtu(root: str) -> list[dict]:
-    """mvsnet-preprocessed DTU: <scan>/{cams,images,gt_depths}/%08d.(txt|png|pfm) + scan.ply.
+def calibrate_dtu_scan(scan_dir: str, pairs: tuple = ((0, 12), (6, 18), (20, 32))) -> dict:
+    """Pick this scan's pose convention and depth unit from the data, not from the format's reputation.
 
-    Depth is a single-band float PFM already in millimetres (median 648 mm for the DTU turntable, which is
-    the camera-to-object distance), so `--depth-divisor 1000` writes it through unchanged as uint16 mm.
+    The mirror mixes preprocessing generations: some scans store a world->camera extrinsic with millimetre
+    depth, others the inverse, and a few carry metre depth (where rounding millimetres from a 0.6 m value
+    silently produced all-zero maps and 0% coverage). Both choices are decided here by reprojecting two
+    distant views of the same static object and taking the reading that puts the two clouds on top of each
+    other, so a wrong convention shows up as the losing score instead of as a plausible-looking dataset.
     """
+    from scipy.spatial import cKDTree
+
+    cams = sorted(name for name in os.listdir(os.path.join(scan_dir, "cams")) if name.endswith("_cam.txt"))
+    depths = sorted(name for name in os.listdir(os.path.join(scan_dir, "gt_depths")) if name.endswith(".pfm"))
+    if len(cams) < max(pair[1] for pair in pairs) + 1 or len(depths) < len(cams):
+        return {"ok": False, "reason": f"{len(cams)} cams, {len(depths)} depths"}
+
+    # What has to agree is the *ratio* between the depth unit and the camera-translation unit: DTU's
+    # preprocessing stores both in millimetres, and dividing only the depth by 1000 put the object 1000x
+    # further from the camera than it is, which scores ~0.99 instead of ~0.04. The ratio is measured, and
+    # the absolute unit is read off the depth values themselves (>5 means the map is already millimetres).
+    raw_median = float(np.median(read_pfm(os.path.join(scan_dir, "gt_depths", depths[0]))))
+    depth_is_mm = raw_median > 5.0
+    best = None
+    for invert in (False, True):
+        for ratio in (1.0, 1000.0, 0.001):     # translation unit / depth unit
+            scores, usable = [], True
+            for a, b in pairs:
+                cloud = {}
+                for index in (a, b):
+                    E, K = _read_dtu_cam(os.path.join(scan_dir, "cams", cams[index]))
+                    pose = E if invert else np.linalg.inv(E)        # pose := camera->world
+                    metres = read_pfm(os.path.join(scan_dir, "gt_depths", depths[index])) * (1.0 if depth_is_mm else 1000.0)
+                    valid = np.isfinite(metres) & (metres > 20.0) & (metres < 20000.0)
+                    v, u = np.nonzero(valid)
+                    if len(v) < 200:
+                        usable = False
+                        break
+                    step = max(1, len(v) // 1500)
+                    v, u = v[::step], u[::step]
+                    rays = np.linalg.inv(np.array(K, dtype=np.float64)) @ np.column_stack([u, v, np.ones(len(u))]).T
+                    points = np.vstack([rays * metres[v, u][None, :], np.ones((1, len(u)))])
+                    world = pose[:3, :3] @ points[:3] + pose[:3, 3:4] * ratio * (1.0 if depth_is_mm else 1000.0)
+                    cloud[index] = world.T
+                if not usable:
+                    break
+                joined = np.concatenate([cloud[a], cloud[b]])
+                extent = float(np.linalg.norm(joined.max(0) - joined.min(0)))
+                scores.append(float(np.median(cKDTree(cloud[b]).query(cloud[a])[0])) / max(extent, 1e-9))
+            if not scores:
+                continue
+            value = float(np.mean(scores))
+            if best is None or value < best["wide_baseline_rel"]:
+                best = {"ok": value < 0.05, "invert_extrinsic": invert, "translation_over_depth": ratio,
+                        "depth_is_mm": depth_is_mm, "wide_baseline_rel": round(value, 5)}
+    if best and best["ok"]:
+        return best
+    return {"ok": False, "reason": f"no convention reached rel < 0.05 (best {best})"}
+
+
+def _read_dtu_cam(path: str) -> tuple[np.ndarray, list[list[float]]]:
+    key, extrinsic, intrinsic = None, [], []
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("extrinsic", "intrinsic"):
+            key = line
+            continue
+        row = [float(value) for value in line.split()]
+        if key == "extrinsic" and len(extrinsic) < 4:
+            extrinsic.append(row)
+        elif key == "intrinsic" and len(intrinsic) < 3:
+            intrinsic.append(row)
+    while len(extrinsic) < 4:
+        extrinsic.append([0.0, 0.0, 0.0, 1.0])
+    return np.array(extrinsic, dtype=np.float64), intrinsic
+
+
+def scan_dtu(root: str) -> list[dict]:
+    """mvsnet-preprocessed DTU: <scan>/{cams,images,gt_depths}/%08d.(txt|png|pfm) + scan.ply."""
     entries = []
     for dirpath, dirnames, _ in os.walk(root):
         if "cams" not in dirnames:
             continue
         scan = os.path.basename(dirpath.rstrip("/"))
+        calibration = calibrate_dtu_scan(dirpath)
+        if not calibration.get("ok"):
+            print(f"[skip ] {scan}: {calibration.get('reason')}", flush=True)
+            continue
+        print(f"[cal  ] {scan}: {calibration}", flush=True)
         cams = os.path.join(dirpath, "cams")
         for name in sorted(os.listdir(cams)):
             if not name.endswith("_cam.txt"):
@@ -140,9 +219,17 @@ def scan_dtu(root: str) -> list[dict]:
             stem = name[: -len("_cam.txt")]
             image = os.path.join(dirpath, "images", f"{stem}.png")
             depth = os.path.join(dirpath, "gt_depths", f"{stem}.pfm")
-            if os.path.exists(image) and os.path.exists(depth):
-                entries.append({"scene": scan, "name": stem, "rgb": image,
-                                "pose": os.path.join(cams, name), "depth": depth})
+            if not (os.path.exists(image) and os.path.exists(depth)):
+                continue
+            E, _ = _read_dtu_cam(os.path.join(cams, name))
+            camera_to_world = (E if calibration["invert_extrinsic"] else np.linalg.inv(E)).copy()
+            # staging stores depth as uint16 millimetres but the world frame in metres, so the translation
+            # has to leave the depth's own unit (DTU: millimetres) and arrive in metres
+            depth_to_mm = 1.0 if calibration["depth_is_mm"] else 1000.0
+            depth_unit_in_m = 0.001 if calibration["depth_is_mm"] else 1.0
+            camera_to_world[:3, 3] *= calibration["translation_over_depth"] * depth_unit_in_m
+            entries.append({"scene": scan, "name": stem, "rgb": image, "pose": os.path.join(cams, name),
+                            "depth": depth, "pose_matrix": camera_to_world, "depth_divisor": depth_to_mm})
     return entries
 
 
@@ -186,8 +273,61 @@ def read_pfm(path: str) -> np.ndarray:
     return grid[:, ::-1] if scale < 0 else grid
 
 
+def scan_nrgbd(root: str) -> list[dict]:
+    """Neural RGB-D (NRGBD): <scene>/{images/imgN.png, depth/imgN.png, poses.txt, focal.txt}.
+
+    `poses.txt` is one 4x4 camera->world block per image, four lines each, with no index column and no
+    companion file list - so which block belongs to which image is not stated. Reading the blocks in numeric
+    image order and taking the poses as delivered is what the released scenes are consistent with, but the
+    claim is checked downstream by tools/check_dataset.py: a wrong pairing shows up as cross-view error far
+    above threshold and the clip is dropped, not as a plausible-looking number.
+    """
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if "poses.txt" not in filenames or "images" not in dirnames:
+            continue
+        colors = os.path.join(dirpath, "images")
+        depths = os.path.join(dirpath, "depth")
+        names = [name for name in os.listdir(colors) if name.rsplit(".", 1)[0].startswith("img")]
+        names.sort(key=lambda name: int(re.match(r"img(\d+)", name).group(1)))
+        poses = _pose_blocks(os.path.join(dirpath, "poses.txt"))
+        if len(poses) != len(names):
+            print(f"[warn ] {dirpath}: {len(names)} images vs {len(poses)} pose blocks, taking the min", flush=True)
+        focal_file = os.path.join(dirpath, "focal.txt")
+        focal = float(open(focal_file).read().split()[0]) if os.path.exists(focal_file) else 554.2
+        # images are img<i>.png and depths depth<i>.png with i the numeric frame index, so the join has to
+        # go through the index: looking for img364.png inside depth/ finds nothing and silently drops a scene
+        for index, name in enumerate(names[:len(poses)]):
+            stem = name.rsplit(".", 1)[0]
+            depth = os.path.join(depths, f"depth{stem[3:]}.png")
+            if not os.path.exists(depth):
+                continue
+            probe = cv2.imread(os.path.join(colors, name), cv2.IMREAD_COLOR)
+            entries.append({
+                "scene": os.path.basename(dirpath.rstrip("/")),
+                "name": f"frame-{index:06d}",
+                "rgb": os.path.join(colors, name),
+                "depth": depth,
+                "pose_matrix": poses[index],
+                "focal": focal,
+                "size": probe.shape[:2],
+            })
+    return entries
+
+
+def _pose_blocks(path: str) -> list[np.ndarray]:
+    values = np.loadtxt(path, dtype=np.float64)
+    if values.ndim == 1:
+        values = values.reshape(1, -1)
+    if values.shape[1] != 4 or values.shape[0] % 4:
+        raise SystemExit(f"{path}: expected 4-line 4x4 blocks, got shape {values.shape}")
+    return [values[index:index + 4] for index in range(0, len(values), 4)]
+
+
 def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dict:
-    entries, dialect = scan_dtu(root), "dtu"
+    entries, dialect = scan_nrgbd(root), "nrgbd"
+    if not entries:
+        entries, dialect = scan_dtu(root), "dtu"
     if not entries:
         entries, dialect = scan_flat(root), "flat"
     if not entries:
@@ -218,7 +358,11 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
         depth_dir = os.path.join(out, scene, "depths")
         for folder in (model_dir, image_dir, depth_dir):
             os.makedirs(folder, exist_ok=True)
-        if dialect == "dtu":
+        if dialect == "nrgbd":
+            height, width = frames[0]["size"]
+            fx = fy = frames[0]["focal"]
+            cx, cy = width / 2.0, height / 2.0
+        elif dialect == "dtu":
             # DTU ships one intrinsic per view file; they are identical within a scan, so read the first
             probe = cv2.imread(frames[0]["rgb"], cv2.IMREAD_COLOR)
             height, width = probe.shape[:2]
@@ -229,8 +373,8 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
         lines = ["# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME"]
         usable = 0
         for index, frame in enumerate(sorted(frames, key=lambda item: item["name"]), start=1):
-            if dialect == "dtu":
-                pose, _ = read_dtu_camera(frame["pose"])
+            if dialect in ("nrgbd", "dtu"):
+                pose = frame["pose_matrix"]        # already camera->world: calibrated per scan for DTU
             else:
                 values = np.loadtxt(frame["pose"])
                 if values.size != 16:
@@ -238,7 +382,8 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
                 pose = values.reshape(4, 4)
             stamp = f"{index - 1:06d}"
             colour = cv2.imread(frame["rgb"], cv2.IMREAD_COLOR)
-            if colour is None or not _write_depth(frame["depth"], os.path.join(depth_dir, f"frame-{stamp}.png"), divisor):
+            if colour is None or not _write_depth(frame["depth"], os.path.join(depth_dir, f"frame-{stamp}.png"),
+                                                  frame.get("depth_divisor", divisor)):
                 continue
             cv2.imwrite(os.path.join(image_dir, f"frame-{stamp}.jpg"), colour)
             qvec, tvec = _world_to_camera(pose.reshape(4, 4))

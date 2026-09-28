@@ -77,6 +77,7 @@ def main() -> None:
     resolution = tuple(data_cfg["resolution"])
     dataset = ReconstructionClips(records, image_size=resolution, frames=int(data_cfg["frames"]))
     rows = []
+    skipped: list[tuple] = []
     for index, record in enumerate(records):
         sample = dataset[index]
         video = sample["video"].unsqueeze(0).to(args.device)
@@ -87,6 +88,10 @@ def main() -> None:
         predicted = prediction["points"][:, :frames][0].float().cpu()
         ground_truth = sample["gt_points"][:frames]
         mask = sample["point_mask"][:frames].bool()
+        if not bool(mask.any()):
+            # DTU's turntable views carry background-only frames; scoring them would divide by an empty set
+            skipped.append((record.clip_id, frames))
+            continue
         aligned = align_points_scale(predicted.unsqueeze(0), ground_truth.unsqueeze(0), mask.unsqueeze(0))[0]
         extent = float((ground_truth[mask].float().abs().amax(0) - ground_truth[mask].float().amin(0)).norm())
         error = (aligned - ground_truth).norm(dim=-1)
@@ -107,6 +112,9 @@ def main() -> None:
             write_ply(os.path.join(args.out, "gt.ply"), ground_truth[selected].numpy().astype("float32"))
             write_ply(os.path.join(args.out, "pred.ply"), aligned[selected].numpy().astype("float32"))
             print(f"wrote {args.out}/gt.ply and pred.ply ({int(selected.sum())} points)")
+    if skipped:
+        print(f"skipped {len(skipped)} clips with no valid GT points in {frames} frames: "
+              f"{[name for name, _ in skipped][:6]}", flush=True)
     for row in rows:
         fmt = lambda value: "   --  " if value is None else f"{value:6.3f}"
         print(f"{row['clip']:26s} T={row['frames']:2d} extent={row['scene_extent_m']:6.1f}m "

@@ -94,14 +94,14 @@ def main() -> None:
         centers = sample["gt_camera_centers"].numpy().astype(np.float64)
         absolute, relative = cross_view_error(points, mask)
         best_scale, best_relative = 1.0, relative
-        if args.ascent and np.isfinite(relative):
-            for scale in (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0):
-                clouds = []
-                for view in (0, min(4, points.shape[0] - 1)):
-                    sel = mask[view]
-                    clouds.append(centers[view][None, :] + (depth[view] * scale)[sel][:, None] * rays[view][sel])
-                from scipy.spatial import cKDTree
+        views = (0, min(4, points.shape[0] - 1))
+        # a view with no valid pixel cannot constrain anything, and it made the scale search divide on air
+        if args.ascent and np.isfinite(relative) and all(mask[view].any() for view in views):
+            from scipy.spatial import cKDTree
 
+            for scale in (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0):
+                clouds = [centers[view][None, :] + (depth[view] * scale)[mask[view]][:, None] * rays[view][mask[view]]
+                          for view in views]
                 distance, _ = cKDTree(clouds[1][:4000]).query(clouds[0][:4000])
                 joined = np.concatenate(clouds)
                 extent = np.linalg.norm(joined.max(0) - joined.min(0))
