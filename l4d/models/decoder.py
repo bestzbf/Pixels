@@ -6,7 +6,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from ..utils.geometry import decode_camera_9d, intrinsics_from_fov, unproject_rays
+from ..utils.geometry import decode_camera_9d, intrinsics_from_fov, unproject_rays, z_depth_rays
 from .heads import CameraHead, GeometryHead
 from .refinement import RefinementOutput
 
@@ -47,8 +47,13 @@ class FourDDecoder(nn.Module):
         directions = geometry["ray_dirs"]
         if self.ray_space == "camera":
             directions = torch.einsum("btij,bthwj->bthwi", rot_world_from_cam, directions)
-            directions = torch.nn.functional.normalize(directions, dim=-1)
-        points = unproject_rays(directions, origins, geometry["depth"])
+        directions = torch.nn.functional.normalize(directions, dim=-1)
+        # the depth head is supervised with depth along the camera z axis (that is what every RGB-D release
+        # ships), so Eq. (6) needs the ray whose camera-z component is 1, not the unit ray: unprojecting
+        # with a unit ray under-reaches every off-axis pixel by cos(theta) - ~8 % averaged over a 4:3 frame,
+        # ~25 % at its corners - while the depth term pushes the other way, and the two targets then cannot
+        # both be satisfied by any head.
+        points = unproject_rays(z_depth_rays(directions, rot_world_from_cam), origins, geometry["depth"])
         return {
             "camera_encoding": camera_encoding,
             "camera_rotation": rot_world_from_cam,

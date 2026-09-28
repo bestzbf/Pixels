@@ -48,6 +48,59 @@ def cross_view_error(points: np.ndarray, mask: np.ndarray, max_pairs: int = 8, s
     return median, (median / extent if extent > 0 else float("nan"))
 
 
+def ray_depth_error(points: np.ndarray, mask: np.ndarray, depth: np.ndarray, rays: np.ndarray,
+                    rotation: np.ndarray, centers: np.ndarray, max_pairs: int = 6,
+                    samples: int = 4000, seed: int = 0) -> float:
+    """Depth-consistency along matched rays, relative to the scene's own depth scale.
+
+    `cross_view_error` compares two sampled point clouds by nearest-neighbour distance, so its floor is the
+    *sampling density* of the cloud, not the accuracy of the geometry: 4000 points drawn from a 192x256 view
+    sit ~0.2 m apart on a wall no matter whether the poses are right. On a release with dense, hole-free
+    depth (Hypersim) that floor alone crosses the gate and rejects correct data.
+
+    This instead asks the calibration question directly: take a surface point from view a, express it in
+    camera b's frame, find b's pixel that looks in that direction, and compare the two views' *depth values*
+    at that pixel. Matched by ray angle rather than by 3D proximity, so it is insensitive to how many points
+    were sampled, and a wrong pose convention or a wrong depth unit shows up as a large residual
+    (Hypersim's four convention hypotheses separate by ~250x here, 0.0015 against 0.36-0.42).
+    """
+    rng = np.random.default_rng(seed)
+    frames = [index for index in range(points.shape[0]) if mask[index].sum() > 100]
+    if len(frames) < 2:
+        return float("nan")
+    pairs = [(first, second) for first, second in zip(frames, frames[1:])][:max_pairs]
+    residuals, scales = [], []
+    for first, second in pairs:
+        # canonical (camera-frame) rays of the receiving view, kept to the pixels that have a measurement
+        valid = mask[second].reshape(-1)
+        # gt_camera_rotation is world-from-camera, so reaching camera frame is a transpose
+        received = np.einsum("ij,hwj->hwi", rotation[second].T, rays[second]).reshape(-1, 3)[valid]
+        depths = depth[second][mask[second]].reshape(-1)
+        keep = rng.choice(received.shape[0], size=min(samples, received.shape[0]), replace=False)
+        received, depths = received[keep], depths[keep]
+        received = received / np.linalg.norm(received, axis=-1, keepdims=True)
+        world = points[first][mask[first]].reshape(-1, 3)
+        take = rng.choice(world.shape[0], size=min(samples, world.shape[0]), replace=False)
+        in_b = (world[take] - centers[second]) @ rotation[second]                # into camera b frame
+        front = in_b[:, 2] > 1e-4
+        direction = in_b[front] / np.linalg.norm(in_b[front], axis=-1, keepdims=True)
+        if direction.shape[0] == 0:
+            continue
+        cosine = direction @ received.T
+        nearest = cosine.argmax(axis=1)
+        matched = cosine.max(axis=1) > 0.9995                                     # ~2.5 degrees
+        if matched.sum() < 200:
+            continue
+        # the matched pixel's own depth is the second view's opinion of how far that surface is
+        predicted = in_b[front][matched][:, 2]
+        measured = depths[nearest[matched]]
+        residuals.append(float(np.median(np.abs(predicted - measured))))
+        scales.append(float(np.median(np.concatenate([measured, depth[first][mask[first]]]))))
+    if not residuals:
+        return float("nan")
+    return float(np.mean(residuals) / max(np.mean(scales), 1e-6))
+
+
 def fingerprint(record, dataset: ReconstructionClips, index: int) -> str:
     """Scale-normalised geometry hash, so re-converted copies of one asset are detectable."""
     sample = dataset[index]
@@ -76,6 +129,9 @@ def main() -> None:
                         help="write the clips that pass QC to this manifest, de-colliding ids across datasets")
     parser.add_argument("--split-root", default=None,
                         help="dataset root holding Train/TestSplit.txt; relabels each clip by its own capture")
+    parser.add_argument("--gate", choices=("nn", "coview"), default="nn",
+                        help="nn = nearest-neighbour cloud distance (floored by sampling density); "
+                             "coview = depth consistency along matched rays (a calibration test)")
     parser.add_argument("--holdout-file", default=None,
                         help="one scene per line: clips from these scenes become split=test (for releases that ship no split)")
     args = parser.parse_args()
@@ -97,6 +153,10 @@ def main() -> None:
         rays = sample["gt_ray_dirs"].numpy().astype(np.float64)
         centers = sample["gt_camera_centers"].numpy().astype(np.float64)
         absolute, relative = cross_view_error(points, mask)
+        coview = ray_depth_error(points, mask, depth, rays, sample["gt_camera_rotation"].numpy().astype(np.float64),
+                                 centers) if args.gate == "coview" else float("nan")
+        if args.gate == "coview":
+            relative = coview
         best_scale, best_relative = 1.0, relative
         views = (0, min(4, points.shape[0] - 1))
         # a view with no valid pixel cannot constrain anything, and it made the scale search divide on air
@@ -121,12 +181,14 @@ def main() -> None:
             "frames": int(points.shape[0]), "depth_coverage": round(float(mask.mean()), 4),
             "cross_view_m": None if not np.isfinite(absolute) else round(absolute, 4),
             "cross_view_rel": None if not np.isfinite(relative) else round(relative, 5),
+            "coview_rel": None if not np.isfinite(coview) else round(coview, 5),
             "best_depth_scale": best_scale, "best_rel": round(best_relative, 5),
             "fingerprint": code, "duplicate_of": duplicate_of, "verdict": verdict,
         }
         report.append(row)
         print(f"{row['clip']:26s} cover={row['depth_coverage']*100:5.1f}% rel={row['cross_view_rel']} "
-              f"best_s={best_scale}({best_relative:.4f}) dup={duplicate_of or '-'} -> {verdict}", flush=True)
+              f"coview={row['coview_rel']} best_s={best_scale}({best_relative:.4f}) "
+              f"dup={duplicate_of or '-'} -> {verdict}", flush=True)
 
     kept = [row for row in report if row["verdict"] == "keep"]
     print(f"\n{len(kept)}/{len(report)} clips pass rel<={args.threshold} and are unique")

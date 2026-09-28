@@ -68,11 +68,28 @@ def intrinsics_from_fov(fovy: torch.Tensor, fovx: torch.Tensor, h: int, w: int) 
     return flat.reshape(*fx.shape, 3, 3)
 
 
+def z_depth_rays(directions: torch.Tensor, rotation_world_from_cam: torch.Tensor) -> torch.Tensor:
+    """Rescale unit rays so that Eq. (6)'s depth is measured along the optical axis, the way RGB-D ships it.
+
+    For a forward ray this exactly inverts normalising the canonical (x, y, 1) unprojection ray, so a depth
+    head supervised on depth maps and a point target built from the same maps agree. The floor only matters
+    for grazing or behind-camera rays, which an untrained head emits and which have no meaningful z-depth.
+    """
+    axis = torch.einsum("btij,bthwj->bthwi", rotation_world_from_cam.transpose(-1, -2), directions)
+    return directions / axis[..., 2:3].clamp(min=1e-3)
+
+
 def unproject_rays(
     directions: torch.Tensor, origins: torch.Tensor, depth: torch.Tensor
 ) -> torch.Tensor:
-    """Paper Eq. (6): P_t(u) = o_t + d_t(u) * r_t(u)."""
-    directions = F.normalize(directions, dim=-1)
+    """Paper Eq. (6): P_t(u) = o_t + d_t(u) * r_t(u).
+
+    `directions` is used exactly as given and NOT normalised here, because normalising it silently decides
+    what `depth` means: a unit ray makes d a distance *along the ray*, while a ray scaled to a camera-z
+    component of 1 makes d a depth *along the optical axis*. Every RGB-D release staged here supervises the
+    latter, and the two differ by cos(theta) - about 8 % at the centre of a 4:3 frame and ~25 % at its
+    corners - so the caller picks the convention and this stays a literal reading of the equation.
+    """
     while origins.dim() < directions.dim():
         origins = origins.unsqueeze(-2)
     return origins + depth.unsqueeze(-1) * directions

@@ -112,6 +112,28 @@ def test_scope_ablations_run():
 
 
 # --- Decoder (Eq. 6) ----------------------------------------------------------
+def test_z_depth_rays_invert_the_canonical_unprojection_ray():
+    """(x, y, 1) normalised into a direction and rotated into the world frame has to come back exactly.
+
+    That round trip is what makes the depth head's target and the point target the same quantity; getting it
+    wrong is invisible at the centre of the frame and ~25 % off at the corners.
+    """
+    from l4d.utils.geometry import z_depth_rays
+
+    height, width = 96, 128
+    focal, centre_y, centre_x = 80.0, height / 2, width / 2
+    v, u = torch.meshgrid(torch.arange(height).float(), torch.arange(width).float(), indexing="ij")
+    canonical = torch.stack([(u - centre_x) / focal, (v - centre_y) / focal, torch.ones_like(u)], dim=-1)
+    rotation = quaternion_to_matrix(F.normalize(torch.randn(4), dim=-1)).view(1, 1, 3, 3)
+    unit = F.normalize(torch.einsum("ij,hwj->hwi", rotation[0, 0], canonical), dim=-1)[None, None]
+    recovered = z_depth_rays(unit, rotation)[0, 0]
+    # back into the camera frame the rescaled ray must be exactly (x, y, 1): that is what makes a depth
+    # measured along the optical axis and a point built from the same depth the same quantity
+    in_camera = torch.einsum("ij,hwj->hwi", rotation[0, 0].transpose(0, 1), recovered)
+    assert torch.allclose(in_camera, canonical, atol=1e-4)
+    assert torch.allclose(in_camera[..., 2], torch.ones_like(canonical[..., 2]), atol=1e-4)
+
+
 def test_point_recovery_follows_equation_six():
     directions = F.normalize(torch.randn(2, 3, 4, 5, 3), dim=-1)
     origins = torch.randn(2, 3, 3)

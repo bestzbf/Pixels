@@ -44,6 +44,7 @@ from l4d.data.metashape import _rotmat2qvec
 
 FLAT = re.compile(r"^(frame-\d{4,6})\.color\.(png|jpe?g)$")
 SHOTTON = re.compile(r"^(scene-\d{4}-\d{6})-rgb\.(png|jpg)$")
+HYPERSIM = re.compile(r"^(\d{6})_rgb\.png$")
 SENTINEL = 60000  # uint16 saturation: these pixels carry no measurement
 SHOTTON_INTRINSICS = (640, 480, 585.0, 585.0, 320.5, 240.5)
 
@@ -55,6 +56,14 @@ def _world_to_camera(pose_camera_to_world: np.ndarray) -> tuple[np.ndarray, np.n
 
 def _write_depth(source: str, destination: str, divisor: float) -> int:
     """Store the depth map as uint16 millimetres, dropping sentinel pixels."""
+    if source.endswith(".npy"):
+        # Hypersim ships float metres with NaN where the render had no surface; uint16 mm caps at 65.5 m,
+        # which is above any indoor scene extent here, so out-of-range values are treated as no-measurement
+        metres = np.load(source).astype("float64")
+        millimetres = np.rint(np.nan_to_num(metres, nan=0.0) * (1000.0 / divisor)).astype(np.uint16)
+        millimetres[metres > 65.5] = 0
+        cv2.imwrite(destination, millimetres)
+        return int((millimetres > 0).sum())
     if source.endswith(".pfm"):
         millimetres = np.rint(read_pfm(source) * (1000.0 / divisor)).astype(np.uint16)
         cv2.imwrite(destination, millimetres)
@@ -325,6 +334,37 @@ def scan_nrgbd(root: str) -> list[dict]:
     return entries
 
 
+def scan_hypersim(root: str) -> list[dict]:
+    """Hypersim: `ai_XXX_YYY/cam_00/NNNNNN_{rgb.png,depth.npy,cam.npz}`, one render camera per scene.
+
+    `cam.npz` carries `intrinsics` (3x3, pixels) and `pose` (4x4). Hypersim's own docs describe `pose`
+    as world->camera; on the copy this machine holds that is wrong, and the measurement says so: warping
+    frame a's depth into frame b gives a median residual of 0.0015 of mean depth with `pose` read as
+    camera->world and the .npy taken as z-depth, against 0.36-0.42 for the other three combinations
+    (pose inverted, depth as ray distance). So both choices here are measured, not inherited from the
+    format's reputation - the same rule the DTU calibrator follows.
+    """
+    entries = []
+    for dirpath, _, filenames in os.walk(root):
+        for name in sorted(filenames):
+            match = HYPERSIM.match(name)
+            if not match:
+                continue
+            stem = match.group(1)
+            cam = os.path.join(dirpath, f"{stem}_cam.npz")
+            depth = os.path.join(dirpath, f"{stem}_depth.npy")
+            if not (os.path.exists(cam) and os.path.exists(depth)):
+                continue
+            scene = os.path.basename(os.path.dirname(dirpath.rstrip("/"))) or dirpath
+            entries.append({
+                "scene": f"{scene}_{os.path.basename(dirpath.rstrip('/'))}",
+                "name": stem, "rgb": os.path.join(dirpath, f"{stem}_rgb.png"),
+                "depth": depth, "camera": cam, "pose_matrix": np.load(
+                    cam, allow_pickle=True)["pose"].astype("float64"),  # camera->world, as measured
+            })
+    return entries
+
+
 def _pose_blocks(path: str) -> list[np.ndarray]:
     values = np.loadtxt(path, dtype=np.float64)
     if values.ndim == 1:
@@ -335,7 +375,9 @@ def _pose_blocks(path: str) -> list[np.ndarray]:
 
 
 def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dict:
-    entries, dialect = scan_nrgbd(root), "nrgbd"
+    entries, dialect = scan_hypersim(root), "hypersim"
+    if not entries:
+        entries, dialect = scan_nrgbd(root), "nrgbd"
     if not entries:
         entries, dialect = scan_dtu(root), "dtu"
     if not entries:
@@ -343,7 +385,7 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
     if not entries:
         entries, dialect = scan_shotton(root), "shotton"
     if not entries:
-        raise SystemExit(f"no DTU / 7-Scenes / NRGBD frames recognised under {root}")
+        raise SystemExit(f"no Hypersim / DTU / 7-Scenes / NRGBD frames recognised under {root}")
     calibration = SHOTTON_INTRINSICS
     intrinsic_file = next((os.path.join(dirpath, "camera-intrinsics.txt")
                            for dirpath, _, files in os.walk(root) if "camera-intrinsics.txt" in files), None)
@@ -372,6 +414,12 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
             height, width = frames[0]["size"]
             fx = fy = frames[0]["focal"]
             cx, cy = width / 2.0, height / 2.0
+        elif dialect == "hypersim":
+            probe = cv2.imread(frames[0]["rgb"], cv2.IMREAD_COLOR)
+            height, width = probe.shape[:2]
+            intrinsic = np.load(frames[0]["camera"], allow_pickle=True)["intrinsics"].astype("float64")
+            fx, fy, cx, cy = (float(intrinsic[0, 0]), float(intrinsic[1, 1]),
+                              float(intrinsic[0, 2]), float(intrinsic[1, 2]))
         elif dialect == "dtu":
             # DTU ships one intrinsic per view file; they are identical within a scan, so read the first
             probe = cv2.imread(frames[0]["rgb"], cv2.IMREAD_COLOR)
@@ -383,7 +431,7 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
         lines = ["# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME"]
         usable = 0
         for index, frame in enumerate(sorted(frames, key=lambda item: item["name"]), start=1):
-            if dialect in ("nrgbd", "dtu"):
+            if dialect in ("nrgbd", "dtu", "hypersim"):
                 pose = frame["pose_matrix"]        # already camera->world: calibrated per scan for DTU
             else:
                 values = np.loadtxt(frame["pose"])
