@@ -278,7 +278,10 @@ the full 7-Scenes pool (551 clips, identical clip sets, paired):
 trained is better on **547 of 551 clips**, paired t = **-48.7** (SE 0.00007). Under the old un-normalised
 front door the two arms were indistinguishable (DTU 0.1822 vs 0.1821), which is exactly how a real but
 small effect gets reported as "training does nothing". The improvement is only ~2 % relative, so it is an
-effect, not paper-level accuracy - §4.3 covers what is still wrong.
+effect, not paper-level accuracy - §4.3 covers what is still wrong. **DTU does not show it**: the same
+paired protocol on the DTU pool gives trained 0.1822 vs control 0.1821, t = +0.95, 86 clips better and 81
+worse - nothing. That is consistent with §4.3(b): DTU is where `loss_depth` started at 36 units, so the
+confidence trap was deepest exactly there, and this checkpoint predates the fix.
 
 ### 4.3 Two silent failures that made the above look like nothing, and what they cost
 
