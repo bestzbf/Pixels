@@ -108,6 +108,15 @@ def _split_key(tag: str) -> str:
     return digits.lstrip("0") or digits
 
 
+def _capture_key(scene: str) -> str:
+    """7-Scenes splits are per *capture*, and capture 3 of chess is not capture 3 of fire, so a bare
+    digit key lets whichever split file os.walk reaches last reassign every other scene's test set.
+    Scene names are built as "<scene>_<sequence>", so "chess_seq-02" and chess's "sequence2" line have
+    to meet on the same key."""
+    digits = _split_key(scene)
+    return f"{scene.split('_')[0]}_{digits}" if digits else ""
+
+
 def read_split(root: str) -> dict[str, str]:
     """Honour the benchmark's own TrainSplit.txt / TestSplit.txt instead of inventing a split."""
     split: dict[str, str] = {}
@@ -116,9 +125,10 @@ def read_split(root: str) -> dict[str, str]:
             if not re.match(r"(Train|Test)Split\.txt$", name):
                 continue
             kind = "train" if name.startswith("Train") else "test"
+            scene = os.path.basename(dirpath.rstrip("/"))
             for line in open(os.path.join(dirpath, name), encoding="utf-8", errors="ignore"):
                 if line.strip():
-                    split[_split_key(line)] = kind
+                    split[f"{scene}_{_split_key(line)}"] = kind
     return split
 
 
@@ -399,8 +409,14 @@ def convert(root: str, out: str, divisor: float = 1000.0, limit: int = 0) -> dic
             handle.write(f"1 PINHOLE {width} {height} {fx} {fy} {cx} {cy}\n")
         with open(os.path.join(model_dir, "points3D.txt"), "w", encoding="utf-8") as handle:
             handle.write("# per-view depth maps are authoritative for this dataset\n")
-        written.append({"scene": scene, "frames": usable, "split": split.get(_split_key(scene), "train")})
-    return {"dialect": dialect, "intrinsics": list(calibration), "depth_divisor": divisor, "scenes": written}
+        written.append({"scene": scene, "frames": usable, "split": split.get(_capture_key(scene), "train")})
+    counts: dict[str, int] = {}
+    for row in written:
+        counts[row["split"]] = counts.get(row["split"], 0) + row["frames"]
+    # a benchmark that is supposed to have a test split and reports none has a keying bug, not a dataset;
+    # saying it here is what stops every downstream tool from quietly training on the held-out set
+    return {"dialect": dialect, "intrinsics": list(calibration), "depth_divisor": divisor,
+            "frame_splits": counts, "scenes": written}
 
 
 def main() -> None:

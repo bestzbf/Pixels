@@ -74,6 +74,8 @@ def main() -> None:
     parser.add_argument("--json", default=None)
     parser.add_argument("--emit-manifest", default=None,
                         help="write the clips that pass QC to this manifest, de-colliding ids across datasets")
+    parser.add_argument("--split-root", default=None,
+                        help="dataset root holding Train/TestSplit.txt; relabels each clip by its own capture")
     args = parser.parse_args()
 
     sys.path.insert(0, os.getcwd())
@@ -136,6 +138,20 @@ def main() -> None:
         for row in kept_rows:
             if collisions[row["clip_id"]] > 1:
                 row["clip_id"] = f"{row['clip_id']}__{row.get('dataset', 'clip')}"
+        if args.split_root:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("prepare_benchmark", "tools/prepare_benchmark.py")
+            staging = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(staging)
+            table = staging.read_split(args.split_root)
+            for row in kept_rows:
+                key = staging._capture_key("_".join(row["clip_id"].split("_")[:2]))
+                if key:
+                    row["split"] = table.get(key, row.get("split", "train"))
+            counts = Counter(row.get("split", "train") for row in kept_rows)
+            # an all-train pool is not a benchmark, it is a leak: training on the held-out set still scores
+            print("splits after relabel:", dict(counts) or "none")
         os.makedirs(os.path.dirname(args.emit_manifest) or ".", exist_ok=True)
         with open(args.emit_manifest, "w", encoding="utf-8") as fh:
             for row in kept_rows:

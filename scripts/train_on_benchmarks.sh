@@ -138,7 +138,8 @@ sed -e "s#^manifest:.*#manifest: $POOL/manifest.jsonl#" -e "s#^root:.*#root: $PO
 sed -e "s/^split: train/split: test/" "$DATA" > "$TESTDATA"
 
 log "QC gate (this walks every clip)"
-$PY tools/check_dataset.py --data "$DATA" --threshold 0.05 --emit-manifest "$POOL/manifest.jsonl" | tail -4
+$PY tools/check_dataset.py --data "$DATA" --threshold 0.05 --emit-manifest "$POOL/manifest.jsonl" \
+  --split-root "$seven" | tail -5   # relabels by capture: 7-Scenes splits are per sequence
 log "pool after QC: $(wc -l < "$POOL/manifest.jsonl") clips"
 
 log "latent cache"

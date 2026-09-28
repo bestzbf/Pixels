@@ -73,7 +73,9 @@ def main() -> None:
     vae = (SyntheticVideoVAE(spec) if model_cfg["model"]["vae"].get("backend") == "synthetic"
            else WanVideoVAE(spec, pretrained=spec.checkpoint_id)).to(args.device).eval()
 
-    records = load_manifest(data_cfg["manifest"])
+    # honour the config's split: an evaluator that reads every clip quietly turns a held-out number
+    # into an in-pool one, which is how a leak gets reported as a result
+    records = load_manifest(data_cfg["manifest"], split=data_cfg.get("split"))
     resolution = tuple(data_cfg["resolution"])
     dataset = ReconstructionClips(records, image_size=resolution, frames=int(data_cfg["frames"]))
     rows = []

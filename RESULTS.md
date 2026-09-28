@@ -243,8 +243,9 @@ Sim3/Umeyama mean 0.821 m (0.176 of extent)   inlier@2% 0.000
 ```
 
 A zero-variance axis is not a coordinate-frame mismatch - a rigid fit would have absorbed that (it only
-halved the error, and 0 of 224 664 points still landed inside 2 %). It is a degenerate output, i.e. the
-network was being driven with inputs it never trained on. Reading the three call sites side by side:
+halved the error, and 0 of 224 664 points still landed inside 2 %). It is a degenerate output, and §4.3(b)
+explains why the same sheet came out through either front door: the depth head never left its zero
+initialisation. Reading the three call sites side by side:
 
 * `tools/train.py` took the cached z^obs and always ran `SharedLatentInterface.normalize` (per-channel
   `(z - latents_mean)/latents_std`), then passed an explicit `grid` and `output_size`;
@@ -265,6 +266,57 @@ Fix is structural rather than a patch to one file: `l4d.models.video_interface.a
 same three values from it, so a checkpoint cannot be evaluated through a path it was not trained on. The
 cache-latent test now asserts the grid and output size travel with the latent
 (`tests/test_reproduction.py::test_training_step_prefers_cached_latents`).
+
+**The bug was real, and it was hiding the effect.** Re-measuring both arms through the corrected path on
+the full 7-Scenes pool (551 clips, identical clip sets, paired):
+
+| arm | mean rel_err (of scene extent) | mean inlier fraction @ 2 % |
+|---|---|---|
+| trained (`runs/benchmarks/stage3_lora.pt`) | **0.1669** | 0.19 % |
+| init-only control | 0.1702 | 0.13 % |
+
+trained is better on **547 of 551 clips**, paired t = **-48.7** (SE 0.00007). Under the old un-normalised
+front door the two arms were indistinguishable (DTU 0.1822 vs 0.1821), which is exactly how a real but
+small effect gets reported as "training does nothing". The improvement is only ~2 % relative, so it is an
+effect, not paper-level accuracy - §4.3 covers what is still wrong.
+
+### 4.3 Two silent failures that made the above look like nothing, and what they cost
+
+**(a) The benchmark's held-out split was never applied, so "held-out" scoring was training-set scoring.**
+`tools/prepare_benchmark.py` stored `split.get(_split_key(scene))`, but 7-Scenes ships `TrainSplit.txt` /
+`TestSplit.txt` listing *captures* (`sequence1`...), and a scene name like `chess_seq-02` has to be matched
+as (scene, capture). Two faults followed: the key was the bare digit, so capture 3 of chess and capture 3 of
+fire competed for one slot and `os.walk` order decided the winner; and the lookup used the scene name, whose
+digit extraction is empty, so every clip fell through to the `"train"` default. All 551 staged clips were
+labelled train, `benchmarks_test.local.yaml` (`split: test`) therefore selected **zero** clips, and
+`eval_gt.py` averaged over an empty list and printed `Acc=nan` - which reads like a bad score and is really
+"nothing was measured". The pool is now relabelled from the release's own files (380 train / 171 held-out
+across chess, fire, office, redkitchen, stairs), `check_dataset --emit-manifest --split-root` prints the
+resulting counts so an all-train pool cannot pass as a benchmark again, `eval_recon` honours the config's
+split instead of loading everything, and `eval_gt` prints `k/N clips put a point inside the threshold`
+beside the number.
+
+**(b) The confidence-weighted depth term had a scale trap, and the model fell into it.** The trained heads
+say what training actually did: `decoder.geometry_head.depth_head.bias` is still `mean +0.007` after
+6000 steps (min/max within +-0.03), i.e. the head never left its zero initialisation. With `P = o + d*r`
+and `d ~ 0`, every predicted point sits on its camera centre - the dumped cloud's per-axis std of
+`[0.00 0.13 0.00]` against a GT `[0.49 0.46 0.58]`. That is an optimum, not an accident: for
+`exp(-s)*|dz| + s` the best `s` is `log|dz|`, so the geometry gradient arrives pre-multiplied by
+`1/|dz|`. On DTU (this staging puts a scan at ~80 units, `loss_depth` started at 36) the depth term is
+~36, and inflating `s` is far cheaper than fixing 36 units of depth. `loss_unc` falling 37.6 -> 0.87 while
+`point_mean_err` stayed ~0.18-0.32 and `loss_geom` sat at 1.6 through all three stages is the signature of
+exactly that trade.
+
+The term is now divided by the scene's own mean depth, so an untrained head at `d = 0` starts at `O(1)`
+error in any unit convention, and the loss stops paying for confidence with geometry.
+`tests/test_reproduction.py::test_depth_term_is_scene_scale_free` pins it: the term must be invariant when
+a scene is restated in millimetres, and a zero head must start near 1.0 in both conventions.
+
+The run that follows from both fixes is the paper protocol, on the release's own split: train
+`configs/data/benchmarks.local.yaml` (380 train captures) for 3 stages x 2000 steps into `runs/bench_clean`,
+then score `configs/data/benchmarks_test.local.yaml` (171 held-out captures) with `eval_gt --benchmark
+7scenes` for Acc/Comp/NC beside the paper row, and `eval_recon` for the per-clip pairing against an
+init-only control on the identical clips. Its result goes in §4.4.
 
 ## 5. Table 3 (component ablation) status
 

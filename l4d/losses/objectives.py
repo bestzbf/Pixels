@@ -78,7 +78,14 @@ class LatentTo4DLoss(torch.nn.Module):
         depth, gt_depth = pred["depth"], batch["gt_depth"]
         depth_mask = batch["depth_mask"]
 
-        l_depth = confidence_weighted((depth - gt_depth).abs(), pred["depth_log_conf"], depth_mask)
+        # A confidence-weighted term only keeps its gradient if the error it weights is O(1). At metric
+        # scale |dz| starts near 3, so the optimum of exp(-s)|dz| + s sits at s = log|dz| ~ 1.1 and the
+        # depth gradient is pre-multiplied by exp(-s) ~ 1/3 - the cheapest way down is to inflate the
+        # confidence and leave the head at its zero initialisation, which is what "training does nothing"
+        # looks like from the outside. Dividing by the scene's own mean depth removes that trap and makes
+        # a 160 m courtyard and a 0.5 m DTU object comparable inside one batch.
+        depth_unit = gt_depth[depth_mask].mean().clamp(min=1e-3) if bool(depth_mask.any()) else 1.0
+        l_depth = confidence_weighted((depth - gt_depth).abs() / depth_unit, pred["depth_log_conf"], depth_mask)
         l_grad = gradient_loss(torch.log(depth.clamp(min=1e-3)), torch.log(gt_depth.clamp(min=1e-3)), depth_mask)
         gt_rays = batch["gt_ray_dirs"]
         l_ray = confidence_weighted((pred["ray_dirs"] - gt_rays).norm(dim=-1), pred["ray_log_conf"], depth_mask)

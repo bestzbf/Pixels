@@ -187,6 +187,40 @@ def test_full_loss_is_finite_and_decomposes():
     losses["loss"].backward()
 
 
+def test_depth_term_is_scene_scale_free():
+    """Whether a release ships metres or millimetres must not decide how much gradient geometry gets.
+
+    With an absolute |dz| the confidence-weighted optimum is s = log|dz|, so a millimetre-staged scene
+    silences the depth gradient by exp(-s) and the cheapest loss reduction is to inflate the confidence
+    while the head stays at its zero initialisation - the failure a full-corpus run showed. Rewriting
+    the scene in another unit has to leave the term alone, and an untrained head at depth 0 has to look
+    equally wrong in both.
+    """
+    net = model()
+    pred = net(latent())
+    _, t, h, w = pred["depth"].shape
+    batch = {
+        "gt_depth": torch.rand(1, t, h, w) + 0.5,
+        "depth_mask": torch.ones(1, t, h, w, dtype=torch.bool),
+        "gt_ray_dirs": F.normalize(torch.randn(1, t, h, w, 3), dim=-1),
+        "gt_camera_rotation": pred["camera_rotation"].detach(),
+        "gt_camera_centers": pred["camera_centers"].detach(),
+        "gt_fov": pred["fov"].detach(),
+        "gt_points": pred["points"].detach(),
+        "point_mask": torch.ones(1, t, h, w, dtype=torch.bool),
+    }
+    loss = LatentTo4DLoss()
+    metres = loss(pred, batch)["loss_depth"]
+    millimetres = loss({**pred, "depth": pred["depth"] * 1000.0},
+                       {**batch, "gt_depth": batch["gt_depth"] * 1000.0})["loss_depth"]
+    assert torch.allclose(metres, millimetres, rtol=1e-4)
+    zero = {**pred, "depth": torch.zeros_like(pred["depth"])}
+    starts = [loss({**zero, "depth": zero["depth"] * scale},
+                   {**batch, "gt_depth": batch["gt_depth"] * scale})["loss_depth"] for scale in (1.0, 1000.0)]
+    assert all(torch.isfinite(value) and float(value) < 10.0 for value in starts), starts
+    assert torch.allclose(starts[0], starts[1], rtol=1e-4)
+
+
 # --- Shared-latent interface --------------------------------------------------
 def test_compatibility_gate_rejects_foreign_vae():
     spec = VAESpec()
