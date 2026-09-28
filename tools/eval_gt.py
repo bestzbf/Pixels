@@ -23,7 +23,7 @@ from l4d.data.dataset import ReconstructionClips, SyntheticClips, load_manifest
 from l4d.eval.gt_metrics import GTBenchmark, NRGBD, SEVEN_SCENES, evaluate_prediction
 from l4d.eval.protocol import TABLE_3_REFERENCE, TABLE_3_VARIANTS
 from l4d.models.l4ar import L4ARConfig, apply_pretrained_init, build_l4ar
-from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
+from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE, alignment_inputs
 from l4d.utils.config import load_config
 
 BENCHMARKS = {B.name: B for B in (SEVEN_SCENES, NRGBD)}
@@ -53,19 +53,15 @@ def build_variant(model_cfg: dict, variant: str, device: str, checkpoint: str | 
 
 @torch.no_grad()
 def evaluate_variant(model, vae, dataset, benchmark, device: str, threshold_cm: float) -> dict[str, float]:
-    from l4d.models.video_interface import SharedLatentInterface
-
-    interface = SharedLatentInterface(model.cfg.vae)
     accumulates = {"Acc": [], "Comp": [], "NC": []}
     for index in range(len(dataset)):
         sample = dataset[index]
         video = sample["video"].unsqueeze(0).to(device)
-        latent = sample["latent"].unsqueeze(0).to(device) if torch.is_tensor(sample.get("latent")) \
-            else vae.posterior_mean(video)
-        latent = interface.normalize(latent)
-        frames = video.shape[2]
-        grid = (frames, max(latent.shape[3] // model.cfg.patch_size, 1), max(latent.shape[4] // model.cfg.patch_size, 1))
-        out = model(latent, grid=grid, output_size=(video.shape[3], video.shape[4]))
+        batch = {"video": video}
+        if torch.is_tensor(sample.get("latent")):
+            batch["latent"] = sample["latent"].unsqueeze(0)
+        latent, grid, output_size = alignment_inputs(model, vae, batch, device)
+        out = model(latent, grid=grid, output_size=output_size)
         frames = min(out["points"].shape[1], sample["gt_points"].shape[0])
         prediction = out["points"][0, :frames]
         ground_truth = sample["gt_points"][:frames]
@@ -73,7 +69,12 @@ def evaluate_variant(model, vae, dataset, benchmark, device: str, threshold_cm: 
         for key in accumulates:
             if torch.isfinite(torch.tensor(scores[key])):
                 accumulates[key].append(scores[key])
-    return {key: (sum(values) / len(values) if values else float("nan")) for key, values in accumulates.items()}
+    result = {key: (sum(values) / len(values) if values else float("nan")) for key, values in accumulates.items()}
+    # Acc=nan is not a small score: it means no clip put a single predicted point inside the threshold,
+    # so carry the clip counts and let the caller say which of the two it is.
+    result["clips"] = len(dataset)
+    result["clips_with_inliers"] = len(accumulates["Acc"])
+    return result
 
 
 def main() -> None:
@@ -114,7 +115,9 @@ def main() -> None:
         reference = TABLE_3_REFERENCE.get(variant, {}).get(args.benchmark)
         paper = (f"| paper Acc={reference['Acc']:.3f} Comp={reference['Comp']:.3f} NC={reference['NC']:.3f}"
                  if reference else "| (local pool: no paper reference row)")
-        print(f"{variant:14s} Acc={metrics['Acc']:.3f} Comp={metrics['Comp']:.3f} NC={metrics['NC']:.3f} {paper}")
+        print(f"{variant:14s} Acc={metrics['Acc']:.3f} Comp={metrics['Comp']:.3f} NC={metrics['NC']:.3f} "
+              f"({metrics['clips_with_inliers']:.0f}/{metrics['clips']:.0f} clips put a point inside "
+              f"{args.threshold_cm:.0f} cm) {paper}")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump({"benchmark": args.benchmark, "rows": rows, "reference": TABLE_3_REFERENCE}, fh, indent=2)

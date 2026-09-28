@@ -362,14 +362,10 @@ def test_normalisation_uses_the_per_channel_vae_convention():
 
 def test_training_step_prefers_cached_latents():
     """A poisoned video plus a raising VAE proves the cached z^obs path is the one used."""
-    import importlib.util
-
     from l4d.models.l4ar import build_l4ar
+    from l4d.models.video_interface import alignment_inputs
 
     net = build_l4ar(L4ARConfig(**TINY))
-    spec = importlib.util.spec_from_file_location("train_tool", "tools/train.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
 
     class ExplodingVAE:
         def posterior_mean(self, video):
@@ -379,10 +375,14 @@ def test_training_step_prefers_cached_latents():
     net.cfg.vae.latents_std = (1.0,) * 16
     cached = torch.randn(1, 16, 6, 12, 16)
     batch = {"latent": cached, "video": torch.rand(1, 3, 21, 96, 128) * 10 - 5}
-    latent = module.latent_from_batch(net, ExplodingVAE(), batch, "cpu")
+    latent, grid, output_size = alignment_inputs(net, ExplodingVAE(), batch, "cpu")
     assert latent.shape == cached.shape
     assert torch.equal(latent[:, :15], cached[:, :15])           # unchanged channels
     assert torch.allclose(latent[:, 15], cached[:, 15] - 1.0)    # (z - mean)/std per channel
+    # the grid and output size travel with the latent: an evaluator that forgets either is not
+    # measuring the model that was trained, which is how "training had no effect" gets invented
+    assert grid == (21, 12 // net.cfg.patch_size, 16 // net.cfg.patch_size)
+    assert output_size == (96, 128)
 
 
 

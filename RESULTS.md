@@ -225,7 +225,49 @@ chain5 (paper scale, 4RC backbone + `cam_dec` head) is the second row of the tab
 are `runs/gpu_real_4rc_camdec/stage{1,2,3}*.pt` and its re-verified evaluation is
 `runs/gpu_real_4rc_camdec/clouds_checked/`. chain6 (per-variant Table 3) is in §5, with a negative result.
 
+### 4.2 Second harness bug: the evaluator fed the model a latent it had never seen
+
+Two paper-scale runs finished back to back - DTU (226 QC-passing clips, 3 stages x 2000 steps) and the
+**full** 7-Scenes release (43 000 frames ingested, 551 QC-passing clips, 516 scored) - and both reported
+trained and init-only control identical to four decimals: DTU 0.1822 vs 0.1821 of scene extent. Training
+itself had clearly done something (bench total loss 42.9 -> 3.8, `loss_cam` 3.67 -> 0.46), so the
+"full-corpus data changes nothing" conclusion was either a real negative or an artefact, and it mattered
+which.
+
+The dump decided it. `runs/benchmarks/clouds_test/{gt,pred}.ply` give per-axis spread
+
+```
+gt std [0.49 0.46 0.58]   pred std [0.00 0.13 0.00]   extent 4.66 m
+scale+shift  mean 1.588 m (0.341 of extent)   inlier@2% 0.000
+Sim3/Umeyama mean 0.821 m (0.176 of extent)   inlier@2% 0.000
+```
+
+A zero-variance axis is not a coordinate-frame mismatch - a rigid fit would have absorbed that (it only
+halved the error, and 0 of 224 664 points still landed inside 2 %). It is a degenerate output, i.e. the
+network was being driven with inputs it never trained on. Reading the three call sites side by side:
+
+* `tools/train.py` took the cached z^obs and always ran `SharedLatentInterface.normalize` (per-channel
+  `(z - latents_mean)/latents_std`), then passed an explicit `grid` and `output_size`;
+* `tools/eval_recon.py` called `vae.posterior_mean(video)` and `model(latent)` - **no normalisation, no
+  grid**, so the Wan latents entered the hierarchy raw (O(30) instead of O(1)) and the temporal grid fell
+  back to the model default;
+* `tools/eval_gt.py` normalised but rebuilt the grid by hand.
+
+Three tools, three preprocessing paths, and the trained weights only ever saw one of them. Every
+`rel_err` reported by `eval_recon` up to this point - including the DTU trained-vs-control pair above and
+the 0.1651 bench mean - was measured through a front door the model had never been trained behind, so
+those rows are withdrawn rather than reinterpreted. `eval_gt`'s `Acc=nan` came from the same class of
+silent failure and is now explicit: nan means *no clip put a single predicted point inside the 5 cm
+threshold*, so the tool prints `k/N clips inside threshold` beside the number.
+
+Fix is structural rather than a patch to one file: `l4d.models.video_interface.alignment_inputs` returns
+`(latent, grid, output_size)` from one call, and `train.py`, `eval_recon.py` and `eval_gt.py` all take the
+same three values from it, so a checkpoint cannot be evaluated through a path it was not trained on. The
+cache-latent test now asserts the grid and output size travel with the latent
+(`tests/test_reproduction.py::test_training_step_prefers_cached_latents`).
+
 ## 5. Table 3 (component ablation) status
+
 
 `tools/eval_gt.py` accepts a real pool, and `scripts/run_table3.sh` **trains each variant separately** before
 scoring it (`runs/table3_real/`, 512 d/12 blocks, 800 steps × 3 stages, same 5-clip pool, same seed). Result:

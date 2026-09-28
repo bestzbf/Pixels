@@ -195,3 +195,21 @@ class CompatibleGenerators:
     @property
     def all_compatible(self) -> tuple[str, ...]:
         return tuple(self.t2v) + tuple(self.i2v)
+
+
+def alignment_inputs(model, vae, batch: dict, device: str) -> tuple[torch.Tensor, tuple, tuple]:
+    """The one preprocessing path: cached z^obs when present, normalisation, grid and output size.
+
+    Training and every evaluator must call this, because a checkpoint only means something when it is
+    fed exactly the tensors it was trained on. Evaluating through a different front door (raw latents,
+    or a default grid) measures a model that never existed and shows up as "training had no effect".
+    """
+    cached = batch.get("latent")
+    video = batch["video"].to(device)
+    latent = cached.to(device) if torch.is_tensor(cached) else vae.posterior_mean(video)
+    latent = SharedLatentInterface(model.cfg.vae).normalize(latent)
+    frames = video.shape[2]
+    patch = model.cfg.patch_size
+    height, width = latent.shape[3], latent.shape[4]
+    grid = (frames, max(height // patch, 1), max(width // patch, 1))
+    return latent, grid, (video.shape[3], video.shape[4])

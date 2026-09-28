@@ -27,7 +27,7 @@ from l4d.data.dataset import (
 )
 from l4d.losses.objectives import LatentTo4DLoss, LossConfig
 from l4d.models.l4ar import L4AR, L4ARConfig, apply_pretrained_init, build_l4ar
-from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
+from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE, alignment_inputs
 from l4d.utils.config import load_config
 
 
@@ -44,13 +44,6 @@ def build_vae(model_cfg: dict):
     return WanVideoVAE(spec, pretrained=spec.checkpoint_id)
 
 
-def temporal_grid(model: L4AR, latent: torch.Tensor, video: torch.Tensor):
-    frames = video.shape[2]
-    _, _, _, height, width = latent.shape
-    patch = model.cfg.patch_size
-    return (frames, max(height // patch, 1), max(width // patch, 1)), (video.shape[3], video.shape[4])
-
-
 def parameter_groups(model: L4AR, base_lr: float, lora_lr_scale: float = 1.0) -> list[dict]:
     groups = []
     for name, params in model.trainable_parameter_groups().items():
@@ -61,19 +54,8 @@ def parameter_groups(model: L4AR, base_lr: float, lora_lr_scale: float = 1.0) ->
     return groups
 
 
-def latent_from_batch(model: L4AR, vae, batch: dict, device: str) -> torch.Tensor:
-    """Cached z^obs when available, otherwise encode with the frozen VAE; always in normalised VAE space."""
-    cached = batch.get("latent")
-    latent = cached.to(device) if torch.is_tensor(cached) else vae.posterior_mean(batch["video"].to(device))
-    from l4d.models.video_interface import SharedLatentInterface
-
-    return SharedLatentInterface(model.cfg.vae).normalize(latent)
-
-
 def training_step(model: L4AR, vae, loss_fn: LatentTo4DLoss, batch: dict, device: str) -> tuple[dict, torch.Tensor]:
-    video = batch["video"].to(device)
-    latent = latent_from_batch(model, vae, batch, device)
-    grid, output_size = temporal_grid(model, latent, video)
+    latent, grid, output_size = alignment_inputs(model, vae, batch, device)
     prediction = model(latent, grid=grid, output_size=output_size)
     ground_truth = {
         key: (batch[key].to(device) if torch.is_tensor(batch[key]) else batch[key])

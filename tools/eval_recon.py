@@ -19,7 +19,7 @@ from l4d.data.dataset import ReconstructionClips, load_manifest
 from l4d.eval.gt_metrics import accuracy_completeness
 from l4d.losses.objectives import align_points_scale
 from l4d.models.l4ar import build_initialised_model, vae_spec_from_dict
-from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE
+from l4d.models.video_interface import SyntheticVideoVAE, WanVideoVAE, alignment_inputs
 from l4d.utils.config import load_config
 
 
@@ -81,9 +81,13 @@ def main() -> None:
     for index, record in enumerate(records):
         sample = dataset[index]
         video = sample["video"].unsqueeze(0).to(args.device)
+        batch = {"video": video}
+        if torch.is_tensor(sample.get("latent")):
+            batch["latent"] = sample["latent"].unsqueeze(0)
         with torch.no_grad():
-            latent = vae.posterior_mean(video)
-            prediction = model(latent)
+            # the training path's own preprocessing: cached latent, per-channel normalisation, explicit grid
+            latent, grid, output_size = alignment_inputs(model, vae, batch, args.device)
+            prediction = model(latent, grid=grid, output_size=output_size)
         frames = min(prediction["points"].shape[1], sample["gt_points"].shape[0])
         predicted = prediction["points"][:, :frames][0].float().cpu()
         ground_truth = sample["gt_points"][:frames]
