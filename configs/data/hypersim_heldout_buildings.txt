@@ -1,0 +1,28 @@
+# Hypersim holds out whole *buildings*, because that is the unit that shares assets, textures and layout.
+# Hypersim ships no scene-level split in the archives fetched here (scripts/fetch_mvs_datasets.py pulls
+# per-scene tarballs), so the split is ours: building index % 10 == 0, 23 of 446 scenes across 5 of the
+# 51 buildings. A clip id is <scene>_<cam>_<start>_<frame>, so each name below is a token-boundary prefix
+# of its own clips and of nothing else.
+ai_010_001
+ai_010_002
+ai_010_003
+ai_010_004
+ai_010_005
+ai_010_006
+ai_010_007
+ai_010_008
+ai_010_009
+ai_030_001
+ai_030_002
+ai_030_003
+ai_030_004
+ai_030_005
+ai_030_007
+ai_030_008
+ai_030_009
+ai_030_010
+ai_050_001
+ai_050_002
+ai_050_003
+ai_050_004
+ai_050_005

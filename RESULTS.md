@@ -334,8 +334,72 @@ calibration. `tools/check_dataset.py --holdout-file` applies it and prints the r
 Both are serialised on `flock /tmp/pixels_gpu.lock`, so they run back to back on the one card.
 
 
-## 5. Table 3 (component ablation) status
+### 4.5 A third implementation bug, bigger than the previous two: Eq. (6) redefined what `depth` means
 
+Found while deciding whether Hypersim was usable, and it applies to every dataset already reported.
+
+The staged data disagrees with itself in a very specific way: `gt_points` lie **exactly** along their rays
+(angular error median 0.000°, max 0.03°) but sit at `|pts - centre| = depth / cos(theta)` - median ratio
+**1.077**, rising to ~25 % at the corners of a 4:3 frame. That is the canonical `(x, y, 1)` unprojection,
+i.e. depth measured *along the optical axis*, which is also what `gt_depth` holds, because that is what an
+RGB-D sensor ships. The decoder multiplied that depth by a **unit** ray, so `P = o + d·r` silently made `d`
+a distance along the ray. The two supervised quantities then demanded different answers from the same head:
+the point term wanted `d / cos`, the depth term wanted `d`, and no prediction satisfies both - an error
+floor of roughly 8 % of every depth, frame-average, and 25 % where the frame bends.
+
+`unproject_rays` no longer normalises (doing it inside was what made the choice invisible); `z_depth_rays`
+rescales a unit ray back to camera-z = 1, and
+`test_z_depth_rays_invert_the_canonical_unprojection_ray` asserts the exact round trip - the rescaled ray,
+seen again from the camera, must be `(x, y, 1)`. A net-level version of that test was tried first and
+dropped: an untrained head emits grazing and behind-camera rays, for which z-depth is undefined by
+construction, so the identity only holds on the forward subset and the test measured the guard rather than
+the convention.
+
+Every run reported above was trained and scored through the old unprojection, so §4.2's paired numbers
+(0.1669 vs 0.1702) are a floor with this error still inside them. They are not withdrawn - the pairing was
+measured consistently in both arms - but they are no longer the best the implementation can do, and the
+chain now re-running (`/tmp/chain_fixed.sh`) repeats them with the fix in place.
+
+### 4.6 Hypersim is trainable, and the reason it looked otherwise was unit quantisation
+
+Hypersim was already on disk (446 scenes, 51 buildings, 73 235 frames, 286 GB) but had no ingester. It is
+the closest local substitute for the paper's ScanNet corpus - metric indoor rooms, exact per-frame
+intrinsics and poses, no handheld-tracker drift - and it is 64 times the scene count.
+
+Its conventions were measured rather than read from documentation:
+
+* `cam.npz["pose"]` is **camera->world**, not the world->camera the Hypersim docs describe. Warping one
+  view's depth into the next gives a median residual of **0.0015** of mean depth under that reading
+  against **0.36-0.42** for the other three combinations (pose inverted, depth treated as ray distance).
+* `depth.npy` is float **metres**, z-depth, 1.24-4.44 m in the probe scenes, ~100 % valid pixels.
+
+Staging it produced 0/54 clips through the QC gate, which would have condemned the dataset. Two separate
+causes, both mine:
+
+1. `tools/prepare_benchmark.py`'s new `.npy` branch passed the float metres through `divisor`, which
+   describes *image* conventions (raw units per metre) and defaults to 1000 - so the factor became 1.0 and
+   every depth was written as **whole metres**. Staged depth then differed from the native map by 6.2 %
+   median (p95 16.6 %), which is quantisation, not geometry. Fixed: a metre is always 1000 of the uint16
+   millimetres the staging format stores. After the fix the same comparison reads **0.17 % median**
+   (p95 0.76 %) and camera centres agree to 1e-5.
+2. The gate itself was the wrong instrument. A nearest-neighbour *cloud* distance floors at the sampling
+   density of the point set - 4000 points on a 192x256 view sit ~0.2 m apart on a wall whether or not the
+   poses are right - so dense hole-free depth fails a 0.05 threshold on data that is perfect. `check_dataset
+   --gate coview` therefore compares **depth values along matched rays** instead of point proximity:
+   Hypersim reads 0.0038-0.0048 and **52/54 clips pass**. Calibrating that statistic across the three
+   releases gives 7-Scenes 0.885 inliers at a 2 % tolerance against 0.011 for a deliberately flipped pose
+   convention, so it discriminates by ~80x; the same statistic reads lower on DTU and Hypersim purely
+   because their cameras move ~0.9 m between frames and most of one view's surfaces are occluded in the
+   next, which is a property of the capture, not of the ingestion.
+
+`scripts/train_on_hypersim.sh` runs the whole route at scale: ~5800 clips (15x the 7-Scenes pool), split by
+**whole buildings** (`configs/data/hypersim_heldout_buildings.txt`, 23 scenes of 446, since a building
+shares its assets, textures and layout), QC on `coview`, latents cached, three stages, then the held-out
+buildings scored paired against the same-init control.
+
+
+
+## 5. Table 3 (component ablation) status
 
 `tools/eval_gt.py` accepts a real pool, and `scripts/run_table3.sh` **trains each variant separately** before
 scoring it (`runs/table3_real/`, 512 d/12 blocks, 800 steps × 3 stages, same 5-clip pool, same seed). Result:

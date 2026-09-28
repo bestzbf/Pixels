@@ -57,10 +57,14 @@ def _world_to_camera(pose_camera_to_world: np.ndarray) -> tuple[np.ndarray, np.n
 def _write_depth(source: str, destination: str, divisor: float) -> int:
     """Store the depth map as uint16 millimetres, dropping sentinel pixels."""
     if source.endswith(".npy"):
-        # Hypersim ships float metres with NaN where the render had no surface; uint16 mm caps at 65.5 m,
-        # which is above any indoor scene extent here, so out-of-range values are treated as no-measurement
+        # Hypersim ships float metres with NaN where the render had no surface. `divisor` describes an
+        # *image* convention (raw units per metre) and is meaningless for a float array, so it is ignored
+        # here: a metre is always 1000 of the uint16 millimetres the staging format stores. Honouring it
+        # (the default 1000 makes the factor 1.0) wrote whole metres and quantised every depth by ~6 %.
+        # uint16 mm caps at 65.5 m, above any indoor scene here, so out-of-range values are treated as
+        # no-measurement rather than silently wrapped.
         metres = np.load(source).astype("float64")
-        millimetres = np.rint(np.nan_to_num(metres, nan=0.0) * (1000.0 / divisor)).astype(np.uint16)
+        millimetres = np.rint(np.nan_to_num(metres, nan=0.0) * 1000.0).astype(np.uint16)
         millimetres[metres > 65.5] = 0
         cv2.imwrite(destination, millimetres)
         return int((millimetres > 0).sum())

@@ -219,11 +219,13 @@ def main() -> None:
             # would score memory of that calibration rather than reconstruction.
             held = {line.strip() for line in open(args.holdout_file, encoding="utf-8") if line.strip()
                     and not line.startswith("#")}
+            # a scene name is a token-boundary prefix of its clip ids: "scan1" must match scan1 but not
+            # scan110, and Hypersim's "ai_001_001" heads ai_001_001_cam_00_00_000072
             for row in kept_rows:
-                scene = row["clip_id"].split("_")[0]
-                if scene in held:
+                if any(row["clip_id"] == name or row["clip_id"].startswith(name + "_") for name in held):
                     row["split"] = "test"
-            missing = held - {row["clip_id"].split("_")[0] for row in kept_rows}
+            missing = {name for name in held
+                       if not any(row["clip_id"].startswith(name + "_") for row in kept_rows)}
             if missing:
                 print("holdout scenes with no surviving clip:", sorted(missing))
         # an all-train pool is not a benchmark, it is a leak: training on the held-out set still scores
